@@ -6,9 +6,22 @@
 node_modules/
 web/dist/
 
-# Gren compiler output
-index.js
-*.js.map
+# Gren compiler output. Anchored to the Gren apps on purpose: a bare
+# `index.js` / `*.js.map` is unanchored and matches at ANY depth, which
+# silently swallows unrelated tooling files elsewhere in the tree (the
+# Docusaurus plugin at docs-site/plugins/sdd-content/index.js, for one).
+/server/**/index.js
+/server/**/*.js.map
+/web/**/index.js
+/web/**/*.js.map
+/packages/**/index.js
+/packages/**/*.js.map
+
+# Docusaurus docs site. Sources are committed; build artifacts and the MDX
+# the sdd-content plugin generates from docs/adrs + docs/specs are not.
+docs-site/build/
+docs-site/.docusaurus/
+docs-generated/
 
 # Local databases
 *.sqlite

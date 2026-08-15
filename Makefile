@@ -17,3 +17,25 @@ lint:
 check: lint test
 
 ci: check
+
+# ---- docs site -----------------------------------------------------------
+# Docusaurus site published to https://stump-wtf.pages.stump.rocks/binnacle/
+# by the `docs` job in .gitea/workflows/pipeline.yaml. CI runs `npm ci &&
+# npm run build` in docs-site/ via the shared stump.wtf/ci static-site
+# workflow — the same two commands these targets wrap, so local and CI cannot
+# drift.
+#
+# Not wired into `check`: the site is built by its own CI job on every PR
+# already, and making `make check` depend on a 1400-package npm install would
+# put a node toolchain in the way of a one-line gitleaks run.
+
+docs-install:
+	cd docs-site && npm ci
+
+docs:
+	cd docs-site && npm run build
+
+docs-serve:
+	cd docs-site && npm run start
+
+.PHONY: docs docs-install docs-serve

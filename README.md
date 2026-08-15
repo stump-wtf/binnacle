@@ -9,6 +9,17 @@ Each site is a home or an Airbnb with a UniFi gateway and one Home Assistant;
 one or more Proxmox hardware hosts per site run Ubuntu VMs whose services ship
 as Docker containers fronted by Caddy.
 
+## Documentation
+
+The ADRs and specs below are published as a browsable site, styled with the
+Bubbletea TUI design system:
+
+**https://stump-wtf.pages.stump.rocks/binnacle/**
+
+It is built from `docs/` on every PR and published on merge to `main` (see the
+`docs` job in `.gitea/workflows/pipeline.yaml`). Build it locally with
+`make docs-install && make docs-serve`. The Pages host resolves on the LAN only.
+
 ## Status
 
 Pre-implementation. The architecture record and first specification have landed:

@@ -1,5 +1,6 @@
 # binnacle CI. End-to-end dependency graph:
 #   secret scan → build (make check) → gate (main only)
+#                                   └→ docs (build; publish on main only)
 # The gitleaks workflow is shared from stump.wtf/ci so the ruleset stays
 # uniform across the org. Jobs are separately named because the Gitea Actions
 # log API 404s on this instance — job granularity is often the only signal
@@ -45,7 +46,38 @@ jobs:
           gitleaks version
       - run: make check
 
-  # 3. single explicit gate for main-only jobs to hang off later
+  # 3. docs site → Gitea Pages (https://stump-wtf.pages.stump.rocks/binnacle/)
+  #
+  # Deliberately NOT behind the main-only gate below. The shared workflow
+  # already refuses to publish from anything but the default branch, so hanging
+  # it off `build` instead means a PR still *builds* the site — which is the
+  # check that actually earns its keep, because a docs build breaks on content
+  # (bad frontmatter, a broken cross-reference) far more often than on config,
+  # and finding that after merge means main is red for a docs typo.
+  #
+  # node 22 matches the build job above rather than inheriting the shared
+  # default, so the whole repo is on one toolchain. Docusaurus is genuinely
+  # version-sensitive here — harness pins 20 because node 23 fails outright on
+  # ProgressPlugin validation — so this is stated, not assumed. 22 is verified:
+  # a cold `npm ci && npm run build` is green on it.
+  #
+  # Requires PAGES_ACCESS_KEY_ID / PAGES_SECRET_ACCESS_KEY in this repo's
+  # Actions secrets, provisioned from stumpcloud/ansible's pages.users list
+  # (stumpcloud/ansible#381). Until that play runs, this job builds green and
+  # fails on the deploy step with "Garage does not support anonymous access
+  # yet" — rclone falling back to anonymous, which names the symptom and not
+  # the missing secret.
+  docs:
+    needs: [build]
+    uses: https://gitea.stump.rocks/stump.wtf/ci/.gitea/workflows/static-site.yaml@main
+    with:
+      working_directory: docs-site
+      source_dir: docs-site/build
+      site_url: https://stump-wtf.pages.stump.rocks
+      node_version: "22"
+    secrets: inherit
+
+  # 4. single explicit gate for main-only jobs to hang off later
   #    (container image build + deploy arrive with the bootstrap story)
   main-only:
     needs: [build]
