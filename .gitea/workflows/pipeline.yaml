@@ -11,7 +11,8 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    workflow_dispatch:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,7 +27,9 @@ jobs:
     uses: https://gitea.stump.rocks/stump.wtf/ci/.gitea/workflows/gitleaks.yaml@main
     secrets: inherit
 
-  # 2. lint + test via the same make targets run locally
+  # 2. lint + test via the same make targets run locally.
+  #    make lint shells out to gitleaks, which the runner image does not ship —
+  #    install the pinned release so local and CI run the same scanner version.
   build:
     needs: [secrets]
     runs-on: ubuntu-latest
@@ -35,6 +38,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install pinned gitleaks (make lint dependency)
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
       - run: make check
 
   # 3. single explicit gate for main-only jobs to hang off later
