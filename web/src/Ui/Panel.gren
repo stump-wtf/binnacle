@@ -1,0 +1,116 @@
+module Ui.Panel exposing
+    ( plain
+    , titled
+    , view
+    )
+
+{-| The card: a Lip Gloss rounded box, translated to the browser dialect.
+
+Governing: ADR-0001 (Tailwind v4 + daisyUI).
+
+Composition, per the design system: `--bg-surface` fill, a hairline `--line`
+border, `--radius-md` corners, and a subtle purple top-gradient that fakes the
+light falling on a raised panel.
+
+Elevation is **glow, not blur-shadow** — inner cards get no drop shadow at all,
+and a hovered/interactive panel intensifies its bloom instead of lifting off the
+page with a box-shadow. A drop shadow here would read as web-app chrome and
+break the terminal metaphor the rest of the surface is maintaining.
+
+@docs plain, titled, view
+
+-}
+
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+
+
+{-| Full form.
+
+`accent` optionally names a hue for a 2px top rail — used to mark a panel whose
+contents are in a non-nominal state (a site with a host down) without recolouring
+the whole card, which would drown the status chips inside it.
+
+-}
+view :
+    { title : Maybe String
+    , eyebrow : Maybe String
+    , accent : Maybe String
+    , body : Array (Html msg)
+    }
+    -> Html msg
+view config =
+    let
+        -- The inner top-gradient. Kept at .10 alpha: any stronger and it stops
+        -- reading as light and starts reading as a coloured header band.
+        surface =
+            "relative overflow-hidden rounded-md border border-line bg-surface "
+                ++ "bg-[linear-gradient(180deg,var(--tint-primary),transparent_120px)] "
+                ++ "transition-[border-color,box-shadow] duration-200 ease-out"
+
+        rail =
+            when config.accent is
+                Just hue ->
+                    [ H.div
+                        [ A.class ("absolute inset-x-0 top-0 h-0.5 bg-" ++ hue) ]
+                        []
+                    ]
+
+                Nothing ->
+                    []
+
+        hasHeader =
+            config.title /= Nothing || config.eyebrow /= Nothing
+
+        header =
+            if not hasHeader then
+                []
+
+            else
+                    [ H.div
+                        [ A.class "flex flex-col gap-1 border-b border-line-dim px-5 py-4" ]
+                        (Array.flatten
+                            [ when config.eyebrow is
+                                Just text ->
+                                    [ H.span
+                                        [ A.class "font-pixel text-2xs uppercase tracking-[0.18em] text-dim" ]
+                                        [ H.text ("// " ++ text) ]
+                                    ]
+
+                                Nothing ->
+                                    []
+                            , when config.title is
+                                Just text ->
+                                    [ H.h3
+                                        [ A.class "font-display text-md font-bold text-bright" ]
+                                        [ H.text text ]
+                                    ]
+
+                                Nothing ->
+                                    []
+                            ]
+                        )
+                    ]
+    in
+    H.section
+        [ A.class surface ]
+        (Array.flatten
+            [ rail
+            , header
+            , [ H.div [ A.class "px-5 py-4" ] config.body ]
+            ]
+        )
+
+
+{-| A panel with a title and no eyebrow or accent.
+-}
+titled : String -> Array (Html msg) -> Html msg
+titled title body =
+    view { title = Just title, eyebrow = Nothing, accent = Nothing, body = body }
+
+
+{-| A bare surface — no header, just the framed box.
+-}
+plain : Array (Html msg) -> Html msg
+plain body =
+    view { title = Nothing, eyebrow = Nothing, accent = Nothing, body = body }

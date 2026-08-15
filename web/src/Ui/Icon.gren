@@ -1,0 +1,218 @@
+module Ui.Icon exposing
+    ( Icon
+    , activity
+    , box
+    , container
+    , cpu
+    , hardDrive
+    , host
+    , mapPin
+    , refresh
+    , server
+    , site
+    , thermometer
+    , view
+    , withClass
+    )
+
+{-| UI icons — the Lucide frame, plus a hand-written starter set.
+
+Governing: ADR-0001 ("UI icons: Lucide … a repo-owned generator script produces
+Gren modules from the `lucide` npm package's data into `svg-gren` calls. Start
+with a hand-curated allowlist; the generator makes the full set cheap later.")
+
+**This module is the allowlist, and it is deliberately the boring half of that
+decision.** What matters here is `view` — the frame every Lucide icon shares:
+24×24 viewBox, `fill="none"`, `stroke="currentColor"`, 2px stroke, round caps
+and joins. Get that contract right and the codegen tool from ADR-0001's
+follow-up has nothing to design: it only has to emit `Array (Svg msg)` bodies
+shaped like the ones below and append them to this file.
+
+The path data is copied verbatim from `lucide-static` v1.31.0 (ISC), which is
+pinned as a devDependency so the copies can be diffed against their source
+rather than trusted. Nine icons is enough to build the fleet views; adding a
+tenth by hand is fine, adding a hundredth is the signal to write the generator.
+
+`currentColor` is the load-bearing part of the frame: it means an icon inherits
+`text-ok` / `text-danger` from its container, so the status hues in `Ui.Status`
+apply to icons with no per-icon colour handling at all.
+
+@docs Icon, activity, box, container, cpu, hardDrive, host, mapPin, refresh
+@docs server, site, thermometer, view, withClass
+
+-}
+
+import Transmutable.Html.Attributes as HA
+import Transmutable.Svg as S exposing (Svg)
+import Transmutable.Svg.Attributes as SA
+
+
+{-| An icon is just its inner nodes; the frame is applied by `view`. Keeping
+them as data rather than as finished `Svg` values is what lets one `view` own
+the sizing and stroke contract for every icon at once.
+-}
+type alias Icon msg =
+    Array (Svg msg)
+
+
+{-| Render an icon at a size, in the current text colour.
+
+    Ui.Icon.view "size-4 text-ok" Ui.Icon.host
+
+Size comes from the class (`size-4`, `size-5`), not from a width attribute, so
+icons scale with the surrounding type scale.
+
+`aria-hidden` is unconditional: every icon in binnacle sits next to its own text
+label, so announcing it would double-read the row. An icon that ever becomes the
+*only* content of a control needs a label on the control, not a role here.
+
+-}
+view : String -> Icon msg -> Svg msg
+view classes icon =
+    S.svg
+        [ SA.viewBox "0 0 24 24"
+        , SA.fill "none"
+        , SA.stroke "currentColor"
+        , SA.strokeWidth "2"
+        , SA.strokeLinecap "round"
+        , SA.strokeLinejoin "round"
+        , HA.class classes
+        , HA.attribute "aria-hidden" "true"
+        ]
+        icon
+
+
+{-| Render at the default size — `size-4`, which lines up with `text-sm`.
+-}
+withClass : Icon msg -> Svg msg
+withClass =
+    view "size-4"
+
+
+
+-- FLEET TAXONOMY (ADR-0002) ------------------------------------------------
+--
+-- Aliases naming the four levels of the taxonomy, so view code reads
+-- `Ui.Icon.host` rather than `Ui.Icon.server` and stays legible when the
+-- underlying Lucide glyph is swapped.
+
+
+{-| A site — a home or Airbnb with a UniFi gateway.
+-}
+site : Icon msg
+site =
+    mapPin
+
+
+{-| A Proxmox hardware host.
+-}
+host : Icon msg
+host =
+    server
+
+
+{-| A Docker container — the leaf of the taxonomy.
+-}
+container : Icon msg
+container =
+    box
+
+
+
+-- LUCIDE GLYPHS ------------------------------------------------------------
+
+
+{-| `lucide/server`
+-}
+server : Icon msg
+server =
+    [ S.rect [ SA.width "20", SA.height "8", SA.x "2", SA.y "2", SA.rx "2", SA.ry "2" ] []
+    , S.rect [ SA.width "20", SA.height "8", SA.x "2", SA.y "14", SA.rx "2", SA.ry "2" ] []
+    , S.line [ SA.x1 "6", SA.x2 "6.01", SA.y1 "6", SA.y2 "6" ] []
+    , S.line [ SA.x1 "6", SA.x2 "6.01", SA.y1 "18", SA.y2 "18" ] []
+    ]
+
+
+{-| `lucide/box`
+-}
+box : Icon msg
+box =
+    [ S.path
+        [ SA.d "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" ]
+        []
+    , S.path [ SA.d "m3.3 7 8.7 5 8.7-5" ] []
+    , S.path [ SA.d "M12 22V12" ] []
+    ]
+
+
+{-| `lucide/map-pin`
+-}
+mapPin : Icon msg
+mapPin =
+    [ S.path
+        [ SA.d "M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" ]
+        []
+    , S.circle [ SA.cx "12", SA.cy "10", SA.r "3" ] []
+    ]
+
+
+{-| `lucide/cpu`
+-}
+cpu : Icon msg
+cpu =
+    [ S.path [ SA.d "M12 20v2" ] []
+    , S.path [ SA.d "M12 2v2" ] []
+    , S.path [ SA.d "M17 20v2" ] []
+    , S.path [ SA.d "M17 2v2" ] []
+    , S.path [ SA.d "M2 12h2" ] []
+    , S.path [ SA.d "M2 17h2" ] []
+    , S.path [ SA.d "M2 7h2" ] []
+    , S.path [ SA.d "M20 12h2" ] []
+    , S.path [ SA.d "M20 17h2" ] []
+    , S.path [ SA.d "M20 7h2" ] []
+    , S.path [ SA.d "M7 20v2" ] []
+    , S.path [ SA.d "M7 2v2" ] []
+    , S.rect [ SA.x "4", SA.y "4", SA.width "16", SA.height "16", SA.rx "2" ] []
+    , S.rect [ SA.x "8", SA.y "8", SA.width "8", SA.height "8", SA.rx "1" ] []
+    ]
+
+
+{-| `lucide/thermometer`
+-}
+thermometer : Icon msg
+thermometer =
+    [ S.path [ SA.d "M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" ] [] ]
+
+
+{-| `lucide/hard-drive`
+-}
+hardDrive : Icon msg
+hardDrive =
+    [ S.path [ SA.d "M10 16h.01" ] []
+    , S.path
+        [ SA.d "M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" ]
+        []
+    , S.path [ SA.d "M21.946 12.013H2.054" ] []
+    , S.path [ SA.d "M6 16h.01" ] []
+    ]
+
+
+{-| `lucide/activity`
+-}
+activity : Icon msg
+activity =
+    [ S.path
+        [ SA.d "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" ]
+        []
+    ]
+
+
+{-| `lucide/refresh-cw`
+-}
+refresh : Icon msg
+refresh =
+    [ S.path [ SA.d "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" ] []
+    , S.path [ SA.d "M21 3v5h-5" ] []
+    , S.path [ SA.d "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" ] []
+    , S.path [ SA.d "M8 16H3v5" ] []
+    ]

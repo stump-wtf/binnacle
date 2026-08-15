@@ -1,0 +1,103 @@
+module Ui.Badge exposing
+    ( count
+    , eyebrow
+    , status
+    , view
+    )
+
+{-| Small labels: status chips, counts, and pixel eyebrows.
+
+Governing: ADR-0002 (fleet taxonomy — status is rendered identically at every
+level).
+
+The recipe is the design system's terminal chip: a low-alpha wash of the hue,
+the hue itself as text, and a hairline border at partial alpha. Written with
+`color-mix` through Tailwind's `/alpha` syntax rather than as three hand-mixed
+colours per state, so a palette change upstream reaches all of them.
+
+Square-ish (`rounded-xs`), never a pill. That is the design system's rule for
+anything that reads as a terminal cell — pills belong to the web dialect's
+larger surfaces, not to a status chip sitting in a dense table.
+
+@docs count, eyebrow, status, view
+
+-}
+
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+import Ui.Status as Status exposing (Status)
+
+
+baseClass : String
+baseClass =
+    "inline-flex items-center gap-1 px-2 py-px rounded-xs font-mono font-bold "
+        ++ "text-2xs uppercase tracking-wide border leading-relaxed whitespace-nowrap"
+
+
+{-| A chip in an arbitrary hue. `hue` is a Tailwind colour name from the bridge
+in `theme.css` — `"ok"`, `"warn"`, `"danger"`, `"info"`, `"charm-pink"`, and so
+on.
+
+Taking the hue as a string is the concession ADR-0001 already made for the whole
+CSS layer: Gren has no typed-CSS codegen, so class names are unchecked strings.
+Prefer `status` below, which closes the set for the case that actually matters.
+
+-}
+view : { hue : String, label : String } -> Html msg
+view config =
+    H.span
+        [ A.class
+            (String.join " "
+                [ baseClass
+                , "bg-" ++ config.hue ++ "/15"
+                , "text-" ++ config.hue
+                , "border-" ++ config.hue ++ "/45"
+                ]
+            )
+        ]
+        [ H.text config.label ]
+
+
+{-| The one to reach for. Glyph plus lowercase label in the status hue, so the
+state is readable three ways — colour, glyph, and word — and never only by
+colour.
+-}
+status : Status -> Html msg
+status s =
+    H.span
+        [ A.class
+            (String.join " "
+                [ baseClass
+                , Status.tintClass s
+                , Status.textClass s
+                , "border-current/40"
+                ]
+            )
+        ]
+        [ H.span [ A.class "not-italic" ] [ H.text (Status.glyph s) ]
+        , H.text (Status.label s)
+        ]
+
+
+{-| A neutral count — "14 containers", "3 hosts". Muted on purpose: a count is
+context, and giving it a hue would compete with the status chips it sits beside.
+-}
+count : Int -> String -> Html msg
+count n noun =
+    H.span
+        [ A.class (baseClass ++ " bg-muted/10 text-muted border-muted/35") ]
+        [ H.text (String.fromInt n ++ " " ++ noun) ]
+
+
+{-| A pixel eyebrow — `// FLEET`, `// SITES`. Silkscreen, wide tracking, no box.
+
+The design system reserves uppercase for exactly this and for status-bar modes,
+which is why it is a distinct function rather than a `Badge.view` variant: it
+should be hard to reach for by accident.
+
+-}
+eyebrow : String -> Html msg
+eyebrow text =
+    H.span
+        [ A.class "font-pixel text-2xs uppercase tracking-[0.18em] text-dim" ]
+        [ H.text ("// " ++ text) ]

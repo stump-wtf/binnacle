@@ -28,9 +28,14 @@ jobs:
     uses: https://gitea.stump.rocks/stump.wtf/ci/.gitea/workflows/gitleaks.yaml@main
     secrets: inherit
 
-  # 2. lint + test via the same make targets run locally.
+  # 2. lint + type-check + build, via the same make targets run locally.
   #    make lint shells out to gitleaks, which the runner image does not ship —
   #    install the pinned release so local and CI run the same scanner version.
+  #
+  #    Steps are named individually rather than split into more jobs: the Gitea
+  #    Actions log API 404s on this instance, so step names inside one job are
+  #    the granularity available, and splitting would mean a second `npm ci` of
+  #    the same tree for no extra signal.
   build:
     needs: [secrets]
     runs-on: ubuntu-latest
@@ -39,12 +44,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Install pinned gitleaks (make lint dependency)
         run: |
           curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
-      - run: make check
+      # Needed before `make check`, which now includes web-check. The Gren
+      # compiler itself comes from node_modules; its *packages* do not — those
+      # are committed in web/gren_packages/ per ADR-0001, so the type-check
+      # never touches the network.
+      - name: Install web dependencies
+        run: make web-install
+      - name: Lint + type-check
+        run: make check
+      - name: Build web bundle
+        run: make build
 
   # 3. docs site → Gitea Pages (https://stump-wtf.pages.stump.rocks/binnacle/)
   #

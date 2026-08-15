@@ -37,6 +37,12 @@ through Vite, a Node server (`gren-lang/node`: HTTP, SQLite, filesystem,
 child processes), and a shared `packages/core` holding the wire contract and
 domain types. See ADR-0001 for the full rationale.
 
+The browser app's design stack has landed in [`web/`](web/): Tailwind CSS v4 +
+daisyUI driven by the Bubbletea TUI design system, and a `Ui.*` Gren component
+library. See [`docs/design/`](docs/design/) for the design language and
+[`web/README.md`](web/README.md) for the build. `server/` and `packages/core`
+arrive with the bootstrap story.
+
 ## Development
 
 ```sh

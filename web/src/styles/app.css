@@ -1,0 +1,42 @@
+/* ============================================================
+   binnacle web — stylesheet entry point
+   ------------------------------------------------------------
+   This is the only stylesheet index.html loads. Everything else
+   arrives through these imports, in this order:
+
+     tailwindcss  — engine + preflight, first so our base layer
+                    lands after the reset rather than under it
+     tokens/*     — the vendored Bubbletea design tokens
+                    (do not edit; see tokens/README.md)
+     theme.css    — binnacle's bridge: @theme inline, the daisyUI
+                    night/day themes, and the base canvas
+
+   The order matters in one specific way: theme.css's @theme
+   block reads the token custom properties, so the token files
+   must be imported before it. CSS @import is hoisted, but
+   Tailwind v4 resolves these at bundle time in source order.
+   ============================================================ */
+
+@import "tailwindcss";
+
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+
+@import "./theme.css";
+
+/* daisyUI's component layer. Our two themes are declared in
+   theme.css via @plugin "daisyui/theme".
+
+   `themes: false` drops daisyUI's built-in light/dark, and that
+   is a correctness fix rather than a size optimisation. Those
+   built-ins answer to data-theme="light" / "dark" — the same
+   attribute our design tokens key on, but with names the tokens
+   do not recognise. Setting either one would give you daisyUI's
+   stock palette on top of design-system tokens still sitting at
+   their night defaults: a half-applied theme that looks like a
+   CSS bug. With the built-ins gone, "night" and "day" are the
+   only values that do anything. */
+@plugin "daisyui" {
+  themes: false;
+}

@@ -1,0 +1,197 @@
+module Ui.Meter exposing
+    ( Thresholds
+    , cpu
+    , defaultThresholds
+    , memory
+    , statusFor
+    , temperature
+    , view
+    )
+
+{-| The horizontal metric bar — the workhorse of a fleet monitor.
+
+Governing: ADR-0002 (hardware metrics at host and VM level: usage, consumption,
+capacity, temperature).
+
+A Bubbles progress bar is a row of coloured cells, so the fill here is a real
+gradient (`--grad-neon-bar`) only while nominal. Once a metric crosses a
+threshold the fill goes flat in the alert hue: a gradient at 95% CPU would put
+mint at the left edge of a bar that means trouble, which is precisely backwards.
+
+**Thresholds are per-metric and explicit.** 85% memory is unremarkable; 85 °C on
+a CPU package is not. A single global "warn at 80" would either cry wolf about
+memory or stay silent about heat, so each metric carries its own — see `cpu`,
+`memory` and `temperature` below.
+
+@docs Thresholds, cpu, defaultThresholds, memory, statusFor, temperature, view
+
+-}
+
+import Math
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+import Ui.Status as Status exposing (Status)
+
+
+{-| Where a metric stops being nominal. Both are values in the metric's own
+units, not percentages, so a temperature meter reads in °C.
+-}
+type alias Thresholds =
+    { warn : Float
+    , danger : Float
+    }
+
+
+{-| Percentage-style default: amber at 75, red at 90.
+-}
+defaultThresholds : Thresholds
+defaultThresholds =
+    { warn = 75, danger = 90 }
+
+
+{-| CPU load, as a percentage. Deliberately later than memory: a host pinned at
+80% CPU is working, not failing.
+-}
+cpu : Thresholds
+cpu =
+    { warn = 80, danger = 95 }
+
+
+{-| Memory, as a percentage. Earlier than CPU — memory pressure ends in the OOM
+killer, and by 95% the useful warning window has closed.
+-}
+memory : Thresholds
+memory =
+    { warn = 75, danger = 90 }
+
+
+{-| Package/sensor temperature, in °C. 80 is the throttling neighbourhood for
+the fleet's Proxmox hosts; 90 is where it stops being a performance question.
+-}
+temperature : Thresholds
+temperature =
+    { warn = 80, danger = 90 }
+
+
+{-| Classify a reading. Exposed because the same thresholds must drive the
+summary chip on a collapsed row and the bar inside the expanded one — deriving
+it twice is how the two end up disagreeing.
+-}
+statusFor : Thresholds -> Float -> Status
+statusFor thresholds value =
+    if value >= thresholds.danger then
+        Status.Down
+
+    else if value >= thresholds.warn then
+        Status.Degraded
+
+    else
+        Status.Up
+
+
+{-| Clamp to the track. A metric can legitimately report over 100 (load average
+as a percentage of cores, a sensor spike); the bar should saturate rather than
+overflow its container.
+-}
+fraction : Float -> Float -> Float
+fraction value max =
+    if max <= 0 then
+        0
+
+    else
+        Basics.clamp 0 1 (value / max)
+
+
+{-| A labelled meter.
+
+    Ui.Meter.view
+        { label = "cpu"
+        , value = 93.5
+        , max = 100
+        , unit = "%"
+        , thresholds = Ui.Meter.cpu
+        }
+
+`aria-valuenow` and friends are set from the same numbers that draw the bar, so
+a screen reader gets the reading rather than an unlabelled decorative div.
+
+-}
+view :
+    { label : String
+    , value : Float
+    , max : Float
+    , unit : String
+    , thresholds : Thresholds
+    }
+    -> Html msg
+view config =
+    let
+        status =
+            statusFor config.thresholds config.value
+
+        pct =
+            fraction config.value config.max * 100
+
+        -- Nominal reads as the neon ramp; anything else goes flat in its hue so
+        -- the colour is unambiguous at a glance across a wall of these.
+        fillClass =
+            when status is
+                Status.Up ->
+                    "bg-[var(--grad-neon-bar)]"
+
+                _ ->
+                    Status.dotClass status
+
+        reading =
+            formatValue config.value ++ config.unit
+    in
+    H.div
+        [ A.class "flex flex-col gap-1" ]
+        [ H.div
+            [ A.class "flex items-baseline justify-between gap-3 font-mono text-2xs" ]
+            [ H.span [ A.class "uppercase tracking-wide text-dim" ] [ H.text config.label ]
+            , H.span
+                [ A.class ("font-bold tabular-nums " ++ Status.textClass status) ]
+                [ H.text reading ]
+            ]
+        , H.div
+            [ A.class "h-1.5 w-full overflow-hidden rounded-xs bg-inset border border-line-dim"
+            , A.attribute "role" "meter"
+            , A.attribute "aria-label" config.label
+            , A.attribute "aria-valuenow" (formatValue config.value)
+            , A.attribute "aria-valuemin" "0"
+            , A.attribute "aria-valuemax" (formatValue config.max)
+            ]
+            [ H.div
+                [ A.class
+                    ("h-full rounded-xs transition-[width] duration-[340ms] ease-out "
+                        ++ fillClass
+                    )
+                , A.style "width" (formatValue pct ++ "%")
+                ]
+                []
+            ]
+        ]
+
+
+{-| One decimal place, and no trailing `.0`. Fleet readings are noisy enough
+that more precision is false confidence, and a column of `93.5` / `7` reads
+better than `93.5` / `7.0`.
+-}
+formatValue : Float -> String
+formatValue value =
+    let
+        rounded =
+            Math.round (value * 10)
+
+        whole =
+            rounded // 10
+
+        tenth =
+            Math.abs (Math.modBy 10 rounded)
+    in
+    if tenth == 0 then
+        String.fromInt whole
+
+    else
+        String.fromInt whole ++ "." ++ String.fromInt tenth

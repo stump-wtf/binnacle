@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>binnacle</title>
+    <meta
+      name="description"
+      content="StumpCloud fleet monitor: sites, hosts, VMs and containers with hardware metrics."
+    />
+
+    <!--
+      Theme bootstrap. This MUST stay inline and MUST stay above the
+      stylesheet link: it runs before first paint, so the correct palette is
+      on <html> by the time any pixel is drawn. Moved into the Gren bundle it
+      would run after the CSS had already painted the night canvas, and every
+      day-mode load would start with a dark flash.
+
+      Three-state, matching the design system: an explicit choice wins,
+      otherwise follow the OS. Storing only an explicit choice (never the
+      resolved value) is what lets a user who has not chosen keep tracking
+      their OS when it changes.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("binnacle-theme");
+          var prefersDay =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: light)").matches;
+          var theme = saved || (prefersDay ? "day" : "night");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          /* Private mode / storage disabled: the markup default (night) stands. */
+        }
+      })();
+    </script>
+
+    <!--
+      Fonts. preconnect first so the TLS handshake to the font CDN overlaps
+      CSS parsing rather than queueing behind it. These are the three families
+      the design system's tokens/fonts.css would otherwise pull in via a
+      nested remote @import — see src/styles/tokens/README.md for why they are
+      loaded here instead.
+
+      JetBrains Mono = body/UI/code · Space Mono = display · Silkscreen = pixel accent.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Silkscreen:wght@400;700&display=swap"
+    />
+
+    <link rel="stylesheet" href="/src/styles/app.css" />
+  </head>
+
+  <body>
+    <!--
+      Gren mounts here. Browser.element replaces this node entirely, so
+      anything inside it is pre-hydration content only. The noscript is the
+      one thing worth keeping: binnacle is a TEA SPA, so without JS there is
+      no fallback rendering to degrade to, and a blank void page reads as an
+      outage rather than a missing capability.
+    -->
+    <div id="app">
+      <noscript>
+        <p style="font-family: monospace; padding: 2rem; color: #c9c9e8">
+          binnacle needs JavaScript — the interface is a Gren single-page app.
+        </p>
+      </noscript>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

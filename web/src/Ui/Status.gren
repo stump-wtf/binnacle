@@ -1,0 +1,137 @@
+module Ui.Status exposing
+    ( Status(..)
+    , dotClass
+    , glyph
+    , label
+    , textClass
+    , tintClass
+    )
+
+{-| Fleet health, as a closed set — and the one place that decides what each
+state looks like.
+
+Governing: ADR-0002 (StumpCloud fleet taxonomy).
+
+binnacle renders the same four states at every level of the taxonomy: a site, a
+host, a VM and a container are all "up, degraded, down, or not answering". If
+each view picked its own colour for those, the hue would stop being information
+and the operator would have to read labels instead of scanning. So the mapping
+lives here once:
+
+    Up        ●  mint    the ANSI "go" colour
+    Degraded  ▲  gold    the design system's warning role
+    Down      ✗  coral   the danger role
+    Unknown   ○  dim     absence of signal, deliberately not a colour
+
+`Unknown` being grey rather than red is a real distinction, not a cosmetic one:
+"the probe did not answer" is not "the host is down", and colouring them alike
+would manufacture outages out of monitoring gaps.
+
+Glyphs, not icons: the design system's iconography is Unicode rendered in the
+mono font. They also mean the status survives a copy-paste into Signal or a
+terminal, and they are legible to anyone who cannot separate the hues.
+
+@docs Status, dotClass, glyph, label, textClass, tintClass
+
+-}
+
+
+{-| -}
+type Status
+    = Up
+    | Degraded
+    | Down
+    | Unknown
+
+
+{-| The status glyph. One cell wide in the mono font, so a column of these
+stays aligned without a fixed-width wrapper.
+-}
+glyph : Status -> String
+glyph status =
+    when status is
+        Up ->
+            "●"
+
+        Degraded ->
+            "▲"
+
+        Down ->
+            "✗"
+
+        Unknown ->
+            "○"
+
+
+{-| Lowercase, matching the design system's voice.
+-}
+label : Status -> String
+label status =
+    when status is
+        Up ->
+            "up"
+
+        Degraded ->
+            "degraded"
+
+        Down ->
+            "down"
+
+        Unknown ->
+            "unknown"
+
+
+{-| Foreground colour utility. Theme-aware for free: the utilities compile to
+`var(--role-*)`, and the design system re-points those under `[data-theme="day"]`.
+-}
+textClass : Status -> String
+textClass status =
+    when status is
+        Up ->
+            "text-ok"
+
+        Degraded ->
+            "text-warn"
+
+        Down ->
+            "text-danger"
+
+        Unknown ->
+            "text-dim"
+
+
+{-| Background utility for a filled dot or bar segment.
+-}
+dotClass : Status -> String
+dotClass status =
+    when status is
+        Up ->
+            "bg-ok"
+
+        Degraded ->
+            "bg-warn"
+
+        Down ->
+            "bg-danger"
+
+        Unknown ->
+            "bg-dim"
+
+
+{-| A low-alpha wash for a whole row or cell. `color-mix` rather than a second
+palette of pre-mixed tints, so it tracks the base hue through a theme flip.
+-}
+tintClass : Status -> String
+tintClass status =
+    when status is
+        Up ->
+            "bg-ok/10"
+
+        Degraded ->
+            "bg-warn/10"
+
+        Down ->
+            "bg-danger/10"
+
+        Unknown ->
+            "bg-dim/10"

@@ -1,0 +1,25 @@
+{
+  "name": "binnacle-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "binnacle browser SPA — Gren + Vite + Tailwind v4 + daisyUI, styled with the Bubbletea TUI design system",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "gren make Main --output=/dev/null"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "daisyui": "^5.7.17",
+    "gren-lang": "0.6.6",
+    "lucide-static": "^1.31.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.6",
+    "vite-plugin-gren": "^0.6.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,173 @@
+module Ui.Terminal exposing
+    ( Mode(..)
+    , logLines
+    , view
+    )
+
+{-| An embedded terminal window — for genuinely terminal content only.
+
+Governing: ADR-0001 (Gren full-stack), ADR-0002 (containers are the leaf of the
+taxonomy; their logs are terminal output).
+
+**Read this before using it.** The design system draws a hard line between its
+two dialects, and this module is the only place binnacle is allowed to cross it:
+
+> A framed window on a web surface means exactly one thing: *a literal embedded
+> terminal*. Never wrap web content in fake terminal chrome.
+
+So this is for `docker logs`, a `systemctl status` dump, an SSH session — output
+that really came from a TTY. It is **not** a decorative frame for a dashboard
+panel; that is `Ui.Panel`. Reaching for this to make an ordinary card look
+"terminal-y" is the single easiest way to make the whole surface look like a
+costume.
+
+Two consequences fall out of it being a real terminal:
+
+  - **It stays night in both themes.** `data-theme="night"` is pinned on the
+    frame, because a terminal emulator does not repaint its scrollback when the
+    surrounding page goes light. Flipping it would also destroy the ANSI colour
+    relationships in the output it is showing.
+  - **The chrome may glow; the body may not.** The frame is the OS layer, so it
+    gets the real drop shadow and a faint bloom. Inside, emphasis is colour and
+    weight only — a terminal cell cannot paint a shadow.
+
+@docs Mode, logLines, view
+
+-}
+
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+
+
+{-| The status-bar mode indicator, in the Vim-ish idiom the design system uses.
+Uppercase here is deliberate and is one of its two sanctioned uses.
+-}
+type Mode
+    = Normal
+    | Following
+    | Paused
+
+
+modeLabel : Mode -> String
+modeLabel mode =
+    when mode is
+        Normal ->
+            "NORMAL"
+
+        Following ->
+            "FOLLOWING"
+
+        Paused ->
+            "PAUSED"
+
+
+modeClass : Mode -> String
+modeClass mode =
+    when mode is
+        Normal ->
+            "bg-charm-purple text-[var(--text-on-purple)]"
+
+        Following ->
+            "bg-neon-mint text-[var(--text-on-accent)]"
+
+        Paused ->
+            "bg-neon-gold text-[var(--text-on-accent)]"
+
+
+{-| A framed terminal window.
+
+    Ui.Terminal.view
+        { title = "caddy · ie01"
+        , mode = Ui.Terminal.Following
+        , body = Ui.Terminal.logLines lines
+        }
+
+-}
+view :
+    { title : String
+    , mode : Mode
+    , body : Array (Html msg)
+    }
+    -> Html msg
+view config =
+    H.div
+        [ -- Pinned night: see the module docs. This attribute is the whole
+          -- mechanism — it re-scopes every design token inside the subtree.
+          A.attribute "data-theme" "night"
+        , A.class
+            ("overflow-hidden rounded-lg border border-line bg-terminal "
+                ++ "shadow-window font-mono text-sm"
+            )
+        ]
+        [ titleBar config.title
+        , H.div
+            [ A.class "max-h-96 overflow-auto px-4 py-3 leading-[1.35]" ]
+            config.body
+        , statusBar config.mode
+        ]
+
+
+{-| The emulator title bar: three dots and a centred title.
+
+The dots are `aria-hidden` — they are window-manager furniture, and announcing
+"circle circle circle" before every log view is pure noise.
+
+-}
+titleBar : String -> Html msg
+titleBar title =
+    let
+        dot hue =
+            H.span
+                [ A.class ("size-2.5 rounded-full " ++ hue) ]
+                []
+    in
+    H.div
+        [ A.class "flex items-center gap-2 border-b border-line-dim bg-surface px-3 py-2" ]
+        [ H.div
+            [ A.class "flex items-center gap-1.5"
+            , A.attribute "aria-hidden" "true"
+            ]
+            [ dot "bg-neon-coral", dot "bg-neon-gold", dot "bg-neon-mint" ]
+        , H.span
+            [ A.class "flex-1 text-center text-xs text-muted" ]
+            [ H.text title ]
+        , -- Balances the dots so the title is optically centred rather than
+          -- shoved right by their width.
+          H.div [ A.class "w-[42px]", A.attribute "aria-hidden" "true" ] []
+        ]
+
+
+{-| The bottom status bar: a solid mode block, then room for future indicators.
+Square corners and a flat fill — this is a Lip Gloss highlight bar, not a chip.
+-}
+statusBar : Mode -> Html msg
+statusBar mode =
+    H.div
+        [ A.class "flex items-stretch border-t border-line-dim bg-surface text-2xs" ]
+        [ H.span
+            [ A.class
+                ("px-2.5 py-1 font-bold tracking-wide " ++ modeClass mode)
+            ]
+            [ H.text (modeLabel mode) ]
+        , H.span
+            [ A.class "flex-1 px-2.5 py-1 text-dim" ]
+            [ H.text "j/k scroll • f follow • q close" ]
+        ]
+
+
+{-| Render plain log lines into the terminal body.
+
+`whitespace-pre` and no wrapping: log output is column-aligned, and reflowing it
+to the container width destroys the alignment that makes a table-shaped log
+readable. The body scrolls horizontally instead.
+
+-}
+logLines : Array String -> Array (Html msg)
+logLines lines =
+    Array.map
+        (\line ->
+            H.div
+                [ A.class "whitespace-pre text-body" ]
+                [ H.text line ]
+        )
+        lines

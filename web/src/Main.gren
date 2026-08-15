@@ -1,0 +1,377 @@
+module Main exposing (main)
+
+{-| The design-stack gallery.
+
+Governing: ADR-0001 (Gren full-stack; TEA everywhere, pure core, effects at the
+edges).
+
+**This is not binnacle.** The fleet app lands with the bootstrap story. What
+this module does is exercise every component in `Ui.*` on one page, which buys
+three things a README cannot:
+
+  - a compile-time check that the component APIs actually compose, so the
+    library cannot rot between stories;
+  - a real Vite/Tailwind build target, so the class strings the components emit
+    are proven to exist rather than assumed;
+  - somewhere to look at both themes side by side while designing.
+
+It is also the smallest honest example of the intended shape: TEA, a pure
+`update`, effects expressed as commands, and the `Transmutable.Html` →
+`VirtualDom` bridge applied once at the `Browser.element` boundary.
+
+-}
+
+import Browser
+import Html
+import LocalStorage
+import Task
+import Time
+import Transmutable.Html as H exposing (Html)
+import Transmutable.Html.Attributes as A
+import Transmutable.Html.VirtualDom as VirtualDom
+import Ui.Badge as Badge
+import Ui.Button as Button
+import Ui.Feedback as Feedback
+import Ui.Icon as Icon
+import Ui.Meter as Meter
+import Ui.Panel as Panel
+import Ui.Status as Status exposing (Status)
+import Ui.Table as Table
+import Ui.Terminal as Terminal
+import Ui.Theme as Theme exposing (Theme)
+import WebStorage
+
+
+
+-- MODEL
+
+
+{-| A stand-in for the real wire type, which will live in `packages/core` and be
+shared with the server. Local and deliberately minimal — the gallery needs
+something table-shaped, not the fleet model.
+-}
+type alias Host =
+    { name : String
+    , site : String
+    , status : Status
+    , cpu : Float
+    , memory : Float
+    , tempC : Float
+    }
+
+
+type alias Model =
+    { theme : Theme
+    , tick : Int
+    , selected : Maybe String
+    }
+
+
+{-| Sample rows, chosen to put one of every status on screen at once — including
+a `Down` host and an `Unknown` one, since those are the states most likely to be
+styled carelessly and never looked at.
+-}
+hosts : Array Host
+hosts =
+    [ { name = "ie01", site = "wynberg", status = Status.Up, cpu = 34.2, memory = 61.8, tempC = 52 }
+    , { name = "pie01", site = "wynberg", status = Status.Up, cpu = 12, memory = 44.1, tempC = 47.5 }
+    , { name = "ogma", site = "wynberg", status = Status.Degraded, cpu = 88.4, memory = 79.2, tempC = 81 }
+    , { name = "hud01", site = "wynberg", status = Status.Unknown, cpu = 0, memory = 0, tempC = 0 }
+    , { name = "buoy", site = "dtw", status = Status.Down, cpu = 0, memory = 96.5, tempC = 91.2 }
+    ]
+
+
+
+-- INIT
+
+
+{-| Flags carry the theme the bootstrap script already resolved and wrote onto
+`<html>`.
+
+Reading it from flags rather than re-deriving it here is the point: the script
+in `index.html` has already consulted `localStorage` and `prefers-color-scheme`
+before first paint, so anything Gren computed would either agree (wasted work)
+or disagree (a visible flip). One decision, made once, in the only place that
+can make it early enough.
+
+-}
+type alias Flags =
+    { theme : String }
+
+
+init : Flags -> { model : Model, command : Cmd Msg }
+init flags =
+    { model =
+        { theme = Maybe.withDefault Theme.Night (Theme.fromString flags.theme)
+        , tick = 0
+        , selected = Just "ogma"
+        }
+    , command = Cmd.none
+    }
+
+
+
+-- UPDATE
+
+
+type Msg
+    = Tick Time.Posix
+    | ToggleTheme
+    | SelectHost String
+    | ThemeStored (Result WebStorage.WriteError {})
+
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        Tick _ ->
+            { model = { model | tick = model.tick + 1 }
+            , command = Cmd.none
+            }
+
+        ToggleTheme ->
+            let
+                next =
+                    Theme.toggle model.theme
+            in
+            { model = { model | theme = next }
+            , command =
+                -- Persist only. The attribute on <html> is set by the CSS-side
+                -- effect below via the same value, and the write is fire-and-
+                -- forget: failing to remember a theme is not worth surfacing.
+                LocalStorage.set Theme.storageKey (Theme.toString next)
+                    |> Task.attempt ThemeStored
+            }
+
+        SelectHost name ->
+            { model =
+                { model
+                    | selected =
+                        -- Clicking the selected row clears it, so the table has
+                        -- a way back to "nothing selected" without a second control.
+                        if model.selected == Just name then
+                            Nothing
+
+                        else
+                            Just name
+                }
+            , command = Cmd.none
+            }
+
+        ThemeStored _ ->
+            { model = model, command = Cmd.none }
+
+
+
+-- SUBSCRIPTIONS
+
+
+{-| One clock for every spinner on the page. 120ms is the design system's
+`--dur-fast`; slower reads as a stutter, faster wastes frames on a glyph
+animation nobody is staring at.
+-}
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Time.every 120 Tick
+
+
+
+-- VIEW
+
+
+{-| The bridge. `Transmutable.Html` is what every component speaks — it can also
+render to a string, which is what makes the library testable without a DOM — and
+`toVirtualDom` converts it to what `Browser.element` wants, exactly once, here.
+-}
+view : Model -> Html.Html Msg
+view model =
+    VirtualDom.toVirtualDom (page model)
+
+
+page : Model -> Html Msg
+page model =
+    H.div
+        [ -- The theme attribute lives on <html> for the real app; the gallery
+          -- also sets it here so the toggle is observable without a port.
+          A.attribute "data-theme" (Theme.toString model.theme)
+        , A.class "min-h-screen bg-void px-6 py-10"
+        ]
+        [ H.div
+            [ A.class "mx-auto flex max-w-[1160px] flex-col gap-8" ]
+            [ header model
+            , overview model
+            , fleetTable model
+            , logs
+            , footer
+            ]
+        ]
+
+
+header : Model -> Html Msg
+header model =
+    H.header
+        [ A.class "flex flex-wrap items-end justify-between gap-4" ]
+        [ H.div
+            [ A.class "flex flex-col gap-2" ]
+            [ Badge.eyebrow "design stack"
+            , H.h1
+                [ A.class "font-display text-3xl font-bold text-bright" ]
+                [ H.text "binnacle"
+                , Feedback.cursor
+                ]
+            , H.p
+                [ A.class "max-w-[68ch] text-sm text-muted" ]
+                [ H.text "sites → hosts → VMs → containers. every component on this page comes from Ui.*, styled by the bubbletea design system." ]
+            ]
+        , H.div
+            [ A.class "flex items-center gap-2" ]
+            [ Button.ghost ("theme: " ++ Theme.label model.theme) ToggleTheme
+            , Button.primary "refresh" (Tick (Time.millisToPosix 0))
+            ]
+        ]
+
+
+{-| Three summary panels. The middle one carries an accent rail because it is
+reporting a degraded host — the pattern for drawing the eye without recolouring
+the whole card.
+-}
+overview : Model -> Html Msg
+overview model =
+    H.div
+        [ A.class "grid gap-5 md:grid-cols-3" ]
+        [ Panel.view
+            { title = Just "fleet"
+            , eyebrow = Just "rollup"
+            , accent = Nothing
+            , body =
+                [ H.div
+                    [ A.class "flex flex-wrap items-center gap-2" ]
+                    [ Badge.status Status.Up
+                    , Badge.count 5 "hosts"
+                    , Badge.count 14 "containers"
+                    ]
+                ]
+            }
+        , Panel.view
+            { title = Just "ogma"
+            , eyebrow = Just "host"
+            , accent = Just "warn"
+            , body =
+                [ H.div
+                    [ A.class "flex flex-col gap-3" ]
+                    [ Meter.view { label = "cpu", value = 88.4, max = 100, unit = "%", thresholds = Meter.cpu }
+                    , Meter.view { label = "memory", value = 79.2, max = 100, unit = "%", thresholds = Meter.memory }
+                    , Meter.view { label = "package temp", value = 81, max = 100, unit = "°C", thresholds = Meter.temperature }
+                    ]
+                ]
+            }
+        , Panel.view
+            { title = Just "discovery"
+            , eyebrow = Just "activity"
+            , accent = Nothing
+            , body =
+                [ H.div
+                    [ A.class "flex flex-col gap-3" ]
+                    [ Feedback.spinner
+                        { frames = Feedback.braille
+                        , tick = model.tick
+                        , label = "probing proxmox…"
+                        }
+                    , H.div
+                        [ A.class "flex items-center gap-2 text-sm text-muted" ]
+                        [ Icon.view "size-4 text-neon-cyan" Icon.activity
+                        , H.text "3 sites reporting"
+                        ]
+                    , H.div
+                        [ A.class "flex items-center gap-2 text-sm text-muted" ]
+                        [ Icon.view "size-4 text-ok" Icon.host
+                        , H.text "last sweep 42s ago"
+                        ]
+                    ]
+                ]
+            }
+        ]
+
+
+fleetTable : Model -> Html Msg
+fleetTable model =
+    Panel.view
+        { title = Just "hosts"
+        , eyebrow = Just "fleet"
+        , accent = Nothing
+        , body =
+            [ Table.view
+                { columns =
+                    [ Table.column "host"
+                        (\host ->
+                            H.span
+                                [ A.class "flex items-center gap-2 font-bold text-bright" ]
+                                [ Icon.view "size-4 text-muted" Icon.host
+                                , H.text host.name
+                                ]
+                        )
+                    , Table.column "site"
+                        (\host -> H.span [ A.class "text-muted" ] [ H.text host.site ])
+                    , Table.column "status" (\host -> Badge.status host.status)
+                    , Table.numeric "cpu"
+                        (\host -> H.text (String.fromFloat host.cpu ++ "%"))
+                    , Table.numeric "mem"
+                        (\host -> H.text (String.fromFloat host.memory ++ "%"))
+                    , Table.numeric "temp"
+                        (\host -> H.text (String.fromFloat host.tempC ++ "°C"))
+                    ]
+                , rows = hosts
+                , isSelected = \host -> model.selected == Just host.name
+                , onSelect = Just (\host -> SelectHost host.name)
+                , empty = "no hosts discovered"
+                }
+            ]
+        }
+
+
+{-| The one place a terminal frame is legitimate: actual container log output.
+-}
+logs : Html Msg
+logs =
+    Terminal.view
+        { title = "caddy · ie01"
+        , mode = Terminal.Following
+        , body =
+            Terminal.logLines
+                [ "2026-08-15T09:14:02Z  INF  serving initial configuration"
+                , "2026-08-15T09:14:02Z  INF  autosaved config          file=/config/caddy/autosave.json"
+                , "2026-08-15T09:14:07Z  INF  http.log.access  handled request  status=200 host=cairn.stump.rocks"
+                , "2026-08-15T09:14:09Z  WRN  http.acme_client  challenge failed  identifier=binnacle.stump.rocks"
+                , "2026-08-15T09:14:11Z  INF  http.log.access  handled request  status=304 host=outline.stump.rocks"
+                ]
+        }
+
+
+{-| Every screen ends in a help footer. Load-bearing, per the design system.
+-}
+footer : Html Msg
+footer =
+    H.footer
+        [ A.class "border-t border-line-dim pt-4" ]
+        [ Feedback.keyHint
+            [ { key = "↑/↓", action = "navigate" }
+            , { key = "enter", action = "select" }
+            , { key = "t", action = "theme" }
+            , { key = "r", action = "refresh" }
+            , { key = "q", action = "quit" }
+            ]
+        ]
+
+
+
+-- MAIN
+
+
+main : Program Flags Model Msg
+main =
+    Browser.element
+        { init = init
+        , view = view
+        , update = update
+        , subscriptions = subscriptions
+        }
