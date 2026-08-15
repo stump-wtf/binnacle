@@ -1,0 +1,22 @@
+# Harness working directories
+.claude/
+.crush/
+
+# Node / Vite
+node_modules/
+web/dist/
+
+# Gren compiler output
+index.js
+*.js.map
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Baseline config carries live credentials — never commit it.
+# binnacle.example.json is the committed template.
+binnacle.json
+
+.DS_Store

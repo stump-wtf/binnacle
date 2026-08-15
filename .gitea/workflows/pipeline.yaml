@@ -1,0 +1,48 @@
+# binnacle CI. End-to-end dependency graph:
+#   secret scan → build (make check) → gate (main only)
+# The gitleaks workflow is shared from stump.wtf/ci so the ruleset stays
+# uniform across the org. Jobs are separately named because the Gitea Actions
+# log API 404s on this instance — job granularity is often the only signal
+# about what failed.
+name: pipeline
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ gitea.workflow }}-${{ gitea.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 1. secret scan — a leaked credential fails the PR rather than landing
+  secrets:
+    uses: https://gitea.stump.rocks/stump.wtf/ci/.gitea/workflows/gitleaks.yaml@main
+    secrets: inherit
+
+  # 2. lint + test via the same make targets run locally
+  build:
+    needs: [secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: make check
+
+  # 3. single explicit gate for main-only jobs to hang off later
+  #    (container image build + deploy arrive with the bootstrap story)
+  main-only:
+    needs: [build]
+    if: ${{ gitea.event_name == 'push' && gitea.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate
+        run: echo "on main with a green build — publishing"

@@ -1,0 +1,13 @@
+# Gitleaks config for binnacle. Extends the default ruleset and allowlists known
+# false positives so the secret scan stays green:
+#   - illustrative example values in ADRs / specs (no live secrets)
+# Real secrets arrive at deploy time as BINNACLE_* env vars from OpenBao and are
+# never committed — so allowlisting docs paths cannot hide a live credential.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Design-doc example fixtures (no live secrets)."
+paths = [
+  '''docs/.*\.md''',
+]
