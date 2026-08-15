@@ -1,0 +1,13 @@
+.git
+.gitea
+.claude
+.crush
+docs
+docs-site
+node_modules
+web/node_modules
+web/dist
+*.sqlite
+*.sqlite3
+*.db
+binnacle.json

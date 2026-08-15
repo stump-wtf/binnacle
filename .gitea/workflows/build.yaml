@@ -1,0 +1,106 @@
+# Build, scan and publish the binnacle container image to
+# gitea.stump.rocks/stump.wtf/binnacle.
+#
+# Modeled on stump.wtf/rack-planner's build.yaml.
+#
+# The Gitea package MUST stay public once it exists: DUB hosts pull
+# anonymously — there is no host-side registry auth anywhere in
+# stumpcloud/ansible (see the rack-planner header for the same constraint),
+# and dub.yaml's binnacle entry pulls :latest with pull: always.
+#
+# Registry auth on this Gitea (< 1.26): the automatic per-run token is
+# REJECTED by the container registry, so a real PAT with write:package scope
+# is required. conf.actions.repos in dub.yaml hardcodes owner: stumpcloud, so
+# it cannot provision this repo's REGISTRY_TOKEN — like cairn, switchboard
+# and rack-planner, a stump.wtf repo sets that secret by hand. Every registry
+# step is guarded on it so the workflow skips green until the secret exists.
+#
+# :latest is tagged on the main ref only — but by ref, not by event, so a
+# workflow_dispatch ON MAIN still publishes it. That is the bootstrap path
+# this incident needs (stumpcloud/stumpcloud#247): the FIRST image can ship
+# without waiting for a merge. Gating on the ref rather than tagging
+# unconditionally keeps a dispatch from a feature branch from overwriting the
+# tag the DUB hosts pull with pull: always. Every push also records a
+# sha-<short> tag for rollbacks.
+#
+# Pull requests build and scan but never log in or push (rack-planner's
+# shape): a Dockerfile that cannot build is caught on the PR instead of
+# breaking the publish after merge and leaving :latest stale.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ gitea.workflow }}-${{ gitea.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: build + scan + push
+    runs-on: ubuntu-latest
+    env:
+      # Step-level `if: env.REG != ''` gates the whole job on the secret
+      # (secrets cannot be used in `if` directly). No token -> every step
+      # skips -> job is green.
+      REG: ${{ secrets.REGISTRY_TOKEN }}
+      IMAGE: gitea.stump.rocks/stump.wtf/binnacle
+    steps:
+      - if: ${{ env.REG != '' }}
+        uses: actions/checkout@v4
+
+      - if: ${{ env.REG != '' }}
+        name: Set metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ gitea.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short
+
+      - if: ${{ env.REG != '' }}
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - if: ${{ env.REG != '' && gitea.event_name != 'pull_request' }}
+        name: Log in to Gitea
+        uses: docker/login-action@v3
+        with:
+          registry: gitea.stump.rocks
+          username: joestump-agent
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - if: ${{ env.REG != '' }}
+        name: Build image (amd64, for scanning)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:scan-${{ gitea.run_id }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+
+      - if: ${{ env.REG != '' }}
+        name: Trivy image scan
+        uses: docker://aquasec/trivy:latest
+        with:
+          args: image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --skip-version-check --format table ${{ env.IMAGE }}:scan-${{ gitea.run_id }}
+
+      - if: ${{ env.REG != '' && gitea.event_name != 'pull_request' }}
+        name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
