@@ -26,6 +26,16 @@
       "description": "Do not automerge dev dependencies",
       "matchDepTypes": ["devDependencies", "dev-dependencies"],
       "automerge": false
+    },
+    {
+      "description": "mix.exs keeps its semver ranges; mix.lock is the pin. config:best-practices pins exact versions, which suits a manifest that may have no lockfile - mix.exs always has one, so an `==` requirement there is redundant and turns every patch release into a hand edit.",
+      "matchManagers": ["mix"],
+      "rangeStrategy": "replace"
+    },
+    {
+      "description": "Hold TypeScript below 7. @docusaurus/tsconfig 3.10.2 sets `baseUrl`, which TS 7 removed (TS5102), so `npm run typecheck` cannot pass on 7.x - and not from this repo's side, since the option comes from the inherited config. Drop this rule when Docusaurus ships a TS7-compatible tsconfig.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
     }
   ]
 }
