@@ -41,6 +41,72 @@ defmodule Binnacle.Fleet.ProxmoxTest do
     end
   end
 
+  describe "client hardening" do
+    # A least-privilege API token — the shape Proxmox's own documentation
+    # recommends — gets `{"data": null}` from an endpoint it may not read.
+    # Mapping over that raised Protocol.UndefinedError inside the poller's
+    # handle_info, which crashes the poller; OTP crash reports render the
+    # GenServer state, and the token lives there. So this decode path was also
+    # the way a credential reached the logs.
+    test "a null guest list is a named poll failure, not a crash" do
+      plug = probe_plug(nil, %{"cpu" => 0.1, "memory" => %{"total" => 100, "used" => 1}})
+
+      assert {:error, reason} = Client.fetch("https://pve", "tok", plug: plug)
+      assert reason =~ "no guest list"
+      assert reason =~ "permission"
+    end
+
+    # `total || 1` did not guard this: 0 is truthy in Elixir, so a node
+    # reporting zero total memory divided by zero and raised.
+    test "a node reporting zero total memory omits the metric rather than raising" do
+      plug = probe_plug([], %{"cpu" => 0.1, "memory" => %{"total" => 0, "used" => 0}})
+
+      assert {:ok, %{sample: sample}} = Client.fetch("https://pve", "tok", plug: plug)
+      assert sample.memory == nil
+      assert sample.cpu == 10.0
+    end
+  end
+
+  describe "credential handling" do
+    test "the poller's state never renders the token" do
+      secret = "PVEAPIToken=root@pam!probe=s3cr3t-value"
+
+      {:ok, pid} =
+        GenServer.start_link(Poller,
+          host_key: "pve1",
+          base_url: "https://pve",
+          token: secret,
+          fetch: fn _, _, _ -> {:error, "nope"} end,
+          sink: self(),
+          interval_ms: 60_000
+        )
+
+      # :sys.get_state is the cheap stand-in for what an OTP crash report,
+      # Logger metadata, or observer would print.
+      refute inspect(:sys.get_state(pid)) =~ "s3cr3t-value"
+    end
+
+    test "the token still reaches the client that needs it" do
+      secret = "PVEAPIToken=root@pam!probe=s3cr3t-value"
+      test_pid = self()
+
+      {:ok, _pid} =
+        GenServer.start_link(Poller,
+          host_key: "pve1",
+          base_url: "https://pve",
+          token: secret,
+          fetch: fn _url, token, _opts ->
+            send(test_pid, {:token_seen, token})
+            {:error, "nope"}
+          end,
+          sink: self(),
+          interval_ms: 60_000
+        )
+
+      assert_receive {:token_seen, ^secret}
+    end
+  end
+
   describe "client" do
     test "decodes node status, guests, and sample" do
       plug = fn conn ->
@@ -217,6 +283,27 @@ defmodule Binnacle.Fleet.ProxmoxTest do
       hardware: [],
       status: :up
     }
+  end
+
+  defp probe_plug(qemu_data, status_data) do
+    fn conn ->
+      body =
+        case conn.request_path do
+          "/api2/json/nodes" ->
+            pve_json(%{"data" => [%{"node" => "pve1", "status" => "online"}]})
+
+          "/api2/json/nodes/pve1/status" ->
+            pve_json(%{"data" => status_data})
+
+          "/api2/json/nodes/pve1/qemu" ->
+            pve_json(%{"data" => qemu_data})
+
+          "/api2/json/nodes/pve1/lxc" ->
+            pve_json(%{"data" => []})
+        end
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end
   end
 
   defp pve_json(map), do: Jason.encode!(map)

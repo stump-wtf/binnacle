@@ -33,9 +33,13 @@ defmodule Binnacle.Fleet.Proxmox.Client do
          {:ok, node_status} <-
            request(base_url, token, "/api2/json/nodes/#{node}/status", opts) |> body(opts),
          {:ok, qemu} <-
-           request(base_url, token, "/api2/json/nodes/#{node}/qemu", opts) |> body(opts),
+           request(base_url, token, "/api2/json/nodes/#{node}/qemu", opts)
+           |> body(opts)
+           |> guest_list("/qemu"),
          {:ok, lxc} <-
-           request(base_url, token, "/api2/json/nodes/#{node}/lxc", opts) |> body(opts) do
+           request(base_url, token, "/api2/json/nodes/#{node}/lxc", opts)
+           |> body(opts)
+           |> guest_list("/lxc") do
       guests =
         (decode_guests(qemu, "qemu") ++ decode_guests(lxc, "lxc"))
         |> Enum.sort_by(& &1.vmid)
@@ -94,6 +98,20 @@ defmodule Binnacle.Fleet.Proxmox.Client do
     |> Req.request()
   end
 
+  # `data` is only a list when the token may actually read the endpoint. A
+  # least-privilege token gets `{"data": null}` instead, and mapping over that
+  # raised Protocol.UndefinedError inside the poller's handle_info -- which
+  # crashes the poller, and OTP crash reports render the GenServer state. The
+  # token lives in that state, so the narrow decode bug was also the way a
+  # credential reached the logs. Name it as a failed poll instead; the Fleet's
+  # miss counter degrades the host, which is the designed response.
+  defp guest_list({:ok, entries}, _path) when is_list(entries), do: {:ok, entries}
+
+  defp guest_list({:ok, _other}, path),
+    do: {:error, "Proxmox #{path} returned no guest list (token may lack permission)"}
+
+  defp guest_list({:error, _} = err, _path), do: err
+
   defp decode_guests(entries, kind) do
     Enum.map(entries, fn entry ->
       %Guest{
@@ -116,14 +134,11 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   # status payload; temperatures only when the node exposes them (pve
   # sensors in `sensors` or cpu package temp in `cpuinfo`).
   defp sample(%{"cpu" => cpu, "memory" => mem} = status) do
-    total = mem["total"] || 1
-    used = mem["used"] || 0
-
     %Sample{
       at: DateTime.utc_now(),
       cpu: percent(cpu),
       gpu: nil,
-      memory: percent(used / total),
+      memory: percent(ratio(mem["used"], mem["total"])),
       disk: nil,
       cpu_temp: temp(status["sensors"]),
       gpu_temp: nil,
@@ -135,6 +150,14 @@ defmodule Binnacle.Fleet.Proxmox.Client do
 
   defp percent(value) when is_number(value), do: Float.round(value * 100, 1)
   defp percent(_), do: nil
+
+  # `total || 1` did not guard this: 0 is truthy in Elixir, so a node
+  # reporting zero total memory divided by zero and raised. An absent metric
+  # is nil, per the "omitted, never zero-filled" rule above.
+  defp ratio(used, total) when is_number(used) and is_number(total) and total > 0,
+    do: used / total
+
+  defp ratio(_used, _total), do: nil
 
   # Temperature extraction: any node-level cpu/package sensor entry shaped
   # like %{"cpu-package" => %{"temperature" => n}} (board-dependent; absence

@@ -11,6 +11,7 @@ defmodule Binnacle.Fleet.Proxmox.Poller do
   use GenServer
 
   alias Binnacle.Fleet.Proxmox.Client
+  alias Binnacle.Fleet.Proxmox.Token
 
   @default_interval :timer.seconds(30)
 
@@ -22,9 +23,15 @@ defmodule Binnacle.Fleet.Proxmox.Poller do
 
   @impl true
   def init(opts) do
+    # Defence in depth for a process that holds a credential: :sensitive
+    # disables tracing and message-queue inspection. It does NOT redact the
+    # state -- :sys.get_state still returns it -- so the token is additionally
+    # wrapped in Token, which is what actually keeps it out of crash reports.
+    Process.flag(:sensitive, true)
+
     host_key = Keyword.fetch!(opts, :host_key)
     base_url = Keyword.fetch!(opts, :base_url)
-    token = Keyword.fetch!(opts, :token)
+    token = Token.new(Keyword.fetch!(opts, :token))
     interval = Keyword.get(opts, :interval_ms, @default_interval)
     fetch = Keyword.get(opts, :fetch, &Client.fetch/3)
     fetch_opts = Keyword.get(opts, :fetch_opts, [])
@@ -46,7 +53,7 @@ defmodule Binnacle.Fleet.Proxmox.Poller do
 
   @impl true
   def handle_info(:poll, state) do
-    result = state.fetch.(state.base_url, state.token, state.fetch_opts)
+    result = state.fetch.(state.base_url, Token.reveal(state.token), state.fetch_opts)
 
     # Errors are delivered too: the Fleet counts consecutive misses so it can
     # degrade the host after three (SPEC-0001: never silently dropped).
