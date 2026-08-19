@@ -110,12 +110,24 @@ jobs:
         name: Smoke test (container boots and serves /)
         shell: bash
         run: |
-          # No `set -e`: the poll loop uses `[ ... ] && break`, whose false
-          # branch would abort the step rather than keep polling.
+          # The runner renders `shell: bash` as `bash --noprofile --norc -e -o
+          # pipefail`, so `-e` is on before this script starts and an in-script
+          # `set -u` does not clear it. Left alone it aborts the step on the
+          # first refused connection — before any diagnostics. Turn it off
+          # deliberately and check exit codes by hand.
+          set +e
           set -uo pipefail
 
           image="${IMAGE}:scan-${{ gitea.run_id }}"
           name="binnacle-smoke-${{ gitea.run_id }}"
+
+          # A per-run host port, not a fixed one: `concurrency` groups by ref,
+          # so two branches' build jobs can share a runner, and run_id is
+          # unique per run. Computed up front rather than read back with
+          # `docker port`, which reports nothing once the container has exited
+          # — precisely the case whose logs matter most.
+          port=$(( 20000 + ${{ gitea.run_id }} % 20000 ))
+          url="http://127.0.0.1:${port}/"
 
           # Trapped rather than deferred to an `if: always()` step, so the
           # container never outlives this step on any exit path — including a
@@ -123,39 +135,38 @@ jobs:
           cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
           trap cleanup EXIT INT TERM
 
-          # An ephemeral host port, not a fixed one: `concurrency` groups by
-          # ref, so two branches' build jobs can land on the same runner at
-          # once and a hardcoded port would collide into a spurious red.
-          docker run -d --name "$name" -p 127.0.0.1::8080 "$image" >/dev/null || {
-            echo "::error::docker run failed for ${image}"
+          # Every failure path goes through here, so the logs are never lost
+          # to an early exit.
+          fail() {
+            echo "::error::$1"
+            echo "--- docker ps -a ---"
+            docker ps -a -f "name=^${name}$"
+            echo "--- docker logs ---"
+            docker logs "$name" 2>&1
             exit 1
           }
 
-          port=$(docker port "$name" 8080/tcp | head -1 | sed 's/.*://')
-          [ -n "$port" ] || { echo "::error::could not resolve the mapped host port"; exit 1; }
-          url="http://127.0.0.1:${port}/"
-          echo "probing ${url}"
+          docker run -d --name "$name" -p "127.0.0.1:${port}:8080" "$image" >/dev/null \
+            || fail "docker run failed for ${image}"
 
+          echo "probing ${url}"
           deadline=$((SECONDS + 30))
           status=000
           while [ "$SECONDS" -lt "$deadline" ]; do
             status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url") || status=000
-            [ "$status" = 200 ] && {
+            if [ "$status" = 200 ]; then
               echo "container served HTTP 200 on / after ${SECONDS}s"
               exit 0
-            }
+            fi
             # An already-exited container will never answer. Stop burning the
             # timeout and go straight to the logs.
-            [ -z "$(docker ps -q -f "name=^${name}$")" ] && break
+            if [ -z "$(docker ps -q -f "name=^${name}$")" ]; then
+              fail "container exited before serving a request"
+            fi
             sleep 1
           done
 
-          echo "::error::image never served HTTP 200 on / within 30s (last status: ${status})"
-          echo "--- docker ps -a ---"
-          docker ps -a -f "name=^${name}$"
-          echo "--- docker logs ---"
-          docker logs "$name" 2>&1 || true
-          exit 1
+          fail "image never served HTTP 200 on / within 30s (last status: ${status})"
 
       - if: ${{ env.REG != '' }}
         name: Trivy image scan
