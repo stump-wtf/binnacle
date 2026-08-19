@@ -7,15 +7,23 @@ defmodule Binnacle.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      BinnacleWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:binnacle, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Binnacle.PubSub},
-      # The fleet context: baseline config + metrics history + sample clock.
-      Binnacle.Fleet,
-      # Start to serve requests, typically the last entry
-      BinnacleWeb.Endpoint
-    ]
+    children =
+      [
+        BinnacleWeb.Telemetry,
+        {DNSCluster, query: Application.get_env(:binnacle, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: Binnacle.PubSub},
+        # The fleet context: baseline config + metrics history + sample clock.
+        Binnacle.Fleet
+        # Proxmox pollers, one per host with API credentials in the baseline
+        # config (SPEC-0001). No creds = no poller; the sampler feeds instead.
+      ] ++
+        Binnacle.Fleet.poller_specs(
+          Application.get_env(:binnacle, :baseline) || "priv/fleet/baseline.json"
+        ) ++
+        [
+          # Start to serve requests, typically the last entry
+          BinnacleWeb.Endpoint
+        ]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options

@@ -1,0 +1,17 @@
+{
+  "sites": [
+    {"slug": "wynberg", "kind": "home"}
+  ],
+  "hosts": [
+    {"key": "ie01", "site": "wynberg", "dial_ip": "10.0.30.11"},
+    {"key": "pve1", "site": "wynberg", "dial_ip": "10.0.30.13",
+     "proxmox": {"url": "https://10.0.30.13:8006", "token": "tok", "poll_seconds": 45}},
+    {"key": "pve2", "site": "wynberg", "dial_ip": "10.0.30.14",
+     "proxmox": {"url": "https://10.0.30.14:8006", "token": "tok2"}}
+  ],
+  "guests": [
+    {"vmid": 101, "host": "ie01", "name": "ie01-guest-1"}
+  ],
+  "containers": [],
+  "hardware": []
+}

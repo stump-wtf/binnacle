@@ -1,0 +1,169 @@
+defmodule Binnacle.Fleet.Proxmox.Client do
+  # Proxmox VE API client for host discovery (SPEC-0001 REQ proxmox).
+  #
+  # One call, `fetch/2`, produces everything the fleet context needs for a
+  # host poll: node status, the guest list (qemu + lxc), and a normalized
+  # hardware Sample. Requests use an API token (PVEAPIToken header), a 5s
+  # connect timeout, and no retries — poll cadence is the retry.
+  #
+  # The client never talks to a host that is not in the baseline config;
+  # authorization to poll comes from the config, not from discovery.
+  #
+  # @joestump-agent 08/19/2026 - Initial version for SPEC-0001 REQ proxmox.
+
+  alias Binnacle.Fleet.Model.{Guest, Sample}
+
+  @timeout 5_000
+
+  @doc """
+  Poll one Proxmox host.
+
+  Returns `{:ok, %{guests: [Guest.t()], sample: Sample.t() | nil, node_status: map()}}`
+  or `{:error, reason}` with the failing step named. The sample is nil when
+  the host answers but exposes no sensor data — missing metrics are omitted,
+  never zero-filled.
+  """
+  @spec fetch(String.t(), String.t(), keyword()) ::
+          {:ok, %{guests: [Guest.t()], sample: Sample.t() | nil, node_status: map()}}
+          | {:error, String.t()}
+  def fetch(base_url, token, opts \\ []) do
+    base_url = String.trim_trailing(base_url, "/")
+
+    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+         {:ok, node_status} <-
+           request(base_url, token, "/api2/json/nodes/#{node}/status", opts) |> body(opts),
+         {:ok, qemu} <-
+           request(base_url, token, "/api2/json/nodes/#{node}/qemu", opts) |> body(opts),
+         {:ok, lxc} <-
+           request(base_url, token, "/api2/json/nodes/#{node}/lxc", opts) |> body(opts) do
+      guests =
+        (decode_guests(qemu, "qemu") ++ decode_guests(lxc, "lxc"))
+        |> Enum.sort_by(& &1.vmid)
+
+      {:ok,
+       %{
+         guests: guests,
+         sample: sample(node_status),
+         node_status: node_status
+       }}
+    end
+  end
+
+  # A node name from /nodes: the single node this API endpoint serves. If the
+  # endpoint reports several (a multi-node address), take the first online
+  # node — v1 scopes one API token per host.
+  defp nodes({:ok, %Req.Response{status: 200, body: body}}, _opts) do
+    with {:ok, %{"data" => nodes}} <- decode_body(body, "/api2/json/nodes") do
+      case Enum.find(nodes, &(&1["status"] == "online")) || List.first(nodes) do
+        %{"node" => name} -> {:ok, name}
+        _ -> {:error, "Proxmox /api2/json/nodes returned no nodes"}
+      end
+    end
+  end
+
+  defp nodes({:ok, %Req.Response{status: status}}, _opts),
+    do: {:error, "Proxmox /api2/json/nodes answered HTTP #{status}"}
+
+  defp nodes({:error, err}, _opts),
+    do: {:error, "Proxmox /api2/json/nodes unreachable: #{format(err)}"}
+
+  defp body({:ok, %Req.Response{status: 200, body: body}}, _opts) do
+    with {:ok, %{"data" => data}} <- decode_body(body, "the node endpoint") do
+      {:ok, data}
+    end
+  end
+
+  defp body({:ok, %Req.Response{status: status}}, _opts),
+    do: {:error, "Proxmox answered HTTP #{status}"}
+
+  defp body({:error, err}, _opts), do: {:error, "Proxmox unreachable: #{format(err)}"}
+
+  defp request(base_url, token, path, opts) do
+    options =
+      [
+        base_url: base_url,
+        url: path,
+        headers: [authorization: "PVEAPIToken=#{token}"],
+        receive_timeout: Keyword.get(opts, :timeout, @timeout),
+        retry: false,
+        decode_body: false
+      ] ++ Keyword.take(opts, [:plug])
+
+    options
+    |> Req.new()
+    |> Req.request()
+  end
+
+  defp decode_guests(entries, kind) do
+    Enum.map(entries, fn entry ->
+      %Guest{
+        vmid: entry["vmid"],
+        host: entry["node"],
+        name: entry["name"] || "vm-#{entry["vmid"]}",
+        containers: [],
+        hardware: [],
+        status: guest_status(entry["status"], kind)
+      }
+    end)
+  end
+
+  defp guest_status("running", _), do: :up
+  defp guest_status("stopped", _), do: :down
+  defp guest_status(_, "lxc"), do: :up
+  defp guest_status(_, _), do: :unknown
+
+  # Normalize node status into a Sample. CPU/memory/load come from the
+  # status payload; temperatures only when the node exposes them (pve
+  # sensors in `sensors` or cpu package temp in `cpuinfo`).
+  defp sample(%{"cpu" => cpu, "memory" => mem} = status) do
+    total = mem["total"] || 1
+    used = mem["used"] || 0
+
+    %Sample{
+      at: DateTime.utc_now(),
+      cpu: percent(cpu),
+      gpu: nil,
+      memory: percent(used / total),
+      disk: nil,
+      cpu_temp: temp(status["sensors"]),
+      gpu_temp: nil,
+      hdd_temp: nil
+    }
+  end
+
+  defp sample(_), do: nil
+
+  defp percent(value) when is_number(value), do: Float.round(value * 100, 1)
+  defp percent(_), do: nil
+
+  # Temperature extraction: any node-level cpu/package sensor entry shaped
+  # like %{"cpu-package" => %{"temperature" => n}} (board-dependent; absence
+  # is normal and yields nil).
+  defp temp(%{} = sensors) do
+    sensors
+    |> Map.values()
+    |> Enum.find_value(fn
+      %{"temperature" => t} when is_number(t) -> Float.round(t * 1.0, 1)
+      _ -> nil
+    end)
+  end
+
+  defp temp(_), do: nil
+
+  defp decode_body(body, _what) when is_map(body), do: {:ok, body}
+
+  defp decode_body(body, what) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} ->
+        {:ok, decoded}
+
+      {:error, err} ->
+        {:error, "Proxmox #{what} returned undecodable JSON: #{Exception.message(err)}"}
+    end
+  end
+
+  defp decode_body(_body, what), do: {:error, "Proxmox #{what} returned no JSON"}
+
+  defp format(%{__exception__: true} = err), do: Exception.message(err)
+  defp format(other), do: inspect(other)
+end

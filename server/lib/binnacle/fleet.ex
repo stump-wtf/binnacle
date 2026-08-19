@@ -12,15 +12,21 @@ defmodule Binnacle.Fleet do
   the window the trend lines draw (at `@sample_ms` cadence, ~10 minutes).
   """
 
+  require Logger
+
   use GenServer
 
   alias Binnacle.Fleet.Config
   alias Binnacle.Fleet.Model
+  alias Binnacle.Fleet.Proxmox.Poller
   alias Binnacle.Fleet.Sampler
 
   @sample_ms 5_000
   @history_len 120
   @default_baseline_path "fleet/baseline.json"
+  # Consecutive poll misses before a host is surfaced as unreachable
+  # (SPEC-0001: never silently dropped).
+  @misses_before_down 3
 
   # Enrichment profile per host key: :hot (degraded-ish), :silent (unknown),
   # or :plain. Stand-in for discovery, keyed like the real fleet.
@@ -31,7 +37,8 @@ defmodule Binnacle.Fleet do
   }
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -49,6 +56,21 @@ defmodule Binnacle.Fleet do
     Phoenix.PubSub.subscribe(Binnacle.PubSub, "fleet")
   end
 
+  @doc """
+  Child specs for the Proxmox pollers, one per host with API credentials in
+  the baseline config. Hosts without a proxmox block keep the sampler feed.
+  """
+  @spec poller_specs(Path.t()) :: [map()]
+  def poller_specs(baseline) do
+    for {key, cfg} <- Config.load!(baseline).proxmox do
+      Supervisor.child_spec(
+        {Poller,
+         host_key: key, base_url: cfg.base_url, token: cfg.token, interval_ms: cfg.poll_ms},
+        id: {Poller, key}
+      )
+    end
+  end
+
   # ---- GenServer -----------------------------------------------------------
 
   # Resolved at runtime, not as a module attribute. `priv/fleet/baseline.json`
@@ -63,8 +85,14 @@ defmodule Binnacle.Fleet do
   def init(opts) do
     baseline = Keyword.get(opts, :baseline, default_baseline())
 
-    %Config{sites: sites, hosts: hosts, guests: guests, containers: containers, hardware: hw} =
-      Config.load!(baseline)
+    %Config{
+      sites: sites,
+      hosts: hosts,
+      guests: guests,
+      containers: containers,
+      hardware: hw,
+      proxmox: proxmox
+    } = Config.load!(baseline)
 
     tick = 0
 
@@ -75,7 +103,10 @@ defmodule Binnacle.Fleet do
       guests: guests,
       containers: containers,
       hardware: hw,
-      history: %{}
+      history: %{},
+      proxmox: MapSet.new(Map.keys(proxmox)),
+      misses: %{},
+      unreachable: MapSet.new()
     }
 
     state = sample(state)
@@ -95,13 +126,71 @@ defmodule Binnacle.Fleet do
     {:noreply, state}
   end
 
+  # ---- proxmox discovery ---------------------------------------------------
+
+  # A successful poll replaces everything the host owns: its guest list
+  # (identity is vmid, so a migration re-parents instead of duplicating) and
+  # its metric sample. Consecutive-miss state resets.
+  def handle_info({:proxmox, host_key, {:ok, %{guests: discovered, sample: sample}}}, state) do
+    guests =
+      Enum.reject(state.guests, &(&1.host == host_key)) ++
+        Enum.map(discovered, &%{&1 | host: host_key})
+
+    history = push_history(Map.get(state.history, host_key, []), sample)
+
+    {:noreply,
+     %{
+       state
+       | guests: guests,
+         history: Map.put(state.history, host_key, history),
+         misses: Map.put(state.misses, host_key, 0),
+         unreachable: MapSet.delete(state.unreachable, host_key)
+     }}
+  end
+
+  # A failed poll degrades only its host (SPEC-0001: single integration
+  # failure degrades one entity). The first misses keep last-known state
+  # without comment; at @misses_before_down the host is surfaced as
+  # unreachable while its last-known snapshot is retained and marked stale.
+  def handle_info({:proxmox, host_key, {:error, reason}}, state) do
+    misses = Map.get(state.misses, host_key, 0) + 1
+
+    if misses >= @misses_before_down do
+      Logger.warning("proxmox poll failed",
+        host: host_key,
+        consecutive_misses: misses,
+        reason: reason
+      )
+    end
+
+    {:noreply,
+     %{
+       state
+       | misses: Map.put(state.misses, host_key, misses),
+         unreachable:
+           if(misses >= @misses_before_down,
+             do: MapSet.put(state.unreachable, host_key),
+             else: state.unreachable
+           )
+     }}
+  end
+
   # ---- sampling ------------------------------------------------------------
 
-  defp sample(%{hosts: hosts, tick: tick} = state) do
+  defp sample(%{hosts: hosts, tick: tick, proxmox: proxmox} = state) do
     history =
       Map.new(hosts, fn host ->
         prev = List.last(state.history[host.key] || [])
-        next = sample_host(host.key, tick, prev)
+
+        # Hosts with live Proxmox discovery get their samples from the
+        # poller; the synthetic sampler would only blur real readings.
+        next =
+          if MapSet.member?(proxmox, host.key) do
+            prev
+          else
+            sample_host(host.key, tick, prev)
+          end
+
         {host.key, push_history(state.history[host.key], next)}
       end)
 
@@ -159,21 +248,30 @@ defmodule Binnacle.Fleet do
           guests = Map.get(guests_by_host, host.key, [])
 
           host_status =
-            if current do
-              Model.roll_up([
-                host_profile_status(host.key),
-                Model.sample_status(current),
-                Model.roll_up(Enum.map(guests, & &1.status))
-              ])
-            else
-              # No signal from the host itself. Its children may still be
-              # reporting, but "no reading and no complaints" is :unknown,
-              # not :up — unless the profile says it is actually down.
-              case Model.roll_up([host_profile_status(host.key) | Enum.map(guests, & &1.status)]) do
-                :up -> :unknown
-                other -> other
-              end
+            cond do
+              MapSet.member?(state.unreachable, host.key) ->
+                :down
+
+              current ->
+                Model.roll_up([
+                  host_profile_status(host.key),
+                  Model.sample_status(current),
+                  Model.roll_up(Enum.map(guests, & &1.status))
+                ])
+
+              true ->
+                # No signal from the host itself. Its children may still be
+                # reporting, but "no reading and no complaints" is :unknown,
+                # not :up — unless the profile says it is actually down.
+                case Model.roll_up([
+                       host_profile_status(host.key) | Enum.map(guests, & &1.status)
+                     ]) do
+                  :up -> :unknown
+                  other -> other
+                end
             end
+
+          host_stale = current == nil or MapSet.member?(state.unreachable, host.key)
 
           %{
             host
@@ -185,7 +283,7 @@ defmodule Binnacle.Fleet do
           |> Map.merge(%{
             sample: current,
             series: series(history),
-            stale: current == nil
+            stale: host_stale
           })
         end)
 

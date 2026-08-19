@@ -13,15 +13,22 @@ defmodule Binnacle.Fleet.Config do
   alias Binnacle.Fleet.Model
   alias Model.{Container, Guest, HardwareDevice, Host, Site}
 
-  @enforce_keys [:sites, :hosts, :guests, :containers, :hardware]
-  defstruct [:sites, :hosts, :guests, :containers, :hardware]
+  @enforce_keys [:sites, :hosts, :guests, :containers, :hardware, :proxmox]
+  defstruct [:sites, :hosts, :guests, :containers, :hardware, :proxmox]
 
   @type t :: %__MODULE__{
           sites: [Site.t()],
           hosts: [Host.t()],
           guests: [Guest.t()],
           containers: [Container.t()],
-          hardware: %{optional(String.t() | integer()) => [HardwareDevice.t()]}
+          hardware: %{optional(String.t() | integer()) => [HardwareDevice.t()]},
+          proxmox: %{optional(String.t()) => proxmox_config()}
+        }
+
+  @type proxmox_config :: %{
+          base_url: String.t(),
+          token: String.t(),
+          poll_ms: non_neg_integer()
         }
 
   @kinds ~w(home airbnb)
@@ -39,6 +46,7 @@ defmodule Binnacle.Fleet.Config do
   @doc "Validate and build a config from a decoded JSON map."
   @spec new!(map()) :: t()
   def new!(%{"sites" => sites, "hosts" => hosts} = config) do
+    proxmox = proxmox_configs(hosts)
     guests = Map.get(config, "guests", [])
     containers = Map.get(config, "containers", [])
     hardware = Map.get(config, "hardware", [])
@@ -62,7 +70,8 @@ defmodule Binnacle.Fleet.Config do
       hosts: Enum.map(hosts, &host/1),
       guests: Enum.map(guests, &guest/1),
       containers: Enum.map(containers, &container/1),
-      hardware: group_hardware(hardware, nodes)
+      hardware: group_hardware(hardware, nodes),
+      proxmox: proxmox
     }
   end
 
@@ -72,6 +81,30 @@ defmodule Binnacle.Fleet.Config do
         ArgumentError,
         "baseline config must be a map with sites and hosts, got: #{inspect(other)}"
       )
+
+  # Optional per-host Proxmox API access (SPEC-0001 REQ proxmox). A host
+  # entry may declare "proxmox": {"url": ..., "token": ..., "poll_seconds": n}
+  # — both url and token are required when the block is present. Tokens are
+  # parsed here and live only in this struct; they are never rendered,
+  # logged, or reachable through the snapshot.
+  defp proxmox_configs(hosts) do
+    hosts
+    |> Enum.flat_map(fn host ->
+      case host["proxmox"] do
+        nil ->
+          []
+
+        %{"url" => url, "token" => token} = block ->
+          poll_ms = Map.get(block, "poll_seconds", 30) * 1000
+          [{host_key(host), %{base_url: url, token: token, poll_ms: poll_ms}}]
+
+        block ->
+          raise ArgumentError,
+                "host #{host_key(host)} has an incomplete proxmox block #{inspect(Map.keys(block || %{}))} (url and token are required)"
+      end
+    end)
+    |> Map.new()
+  end
 
   defp validate_unique_slugs!(slugs) do
     case Enum.find(Enum.frequencies(slugs), fn {_slug, n} -> n > 1 end) do
