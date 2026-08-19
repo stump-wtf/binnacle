@@ -13,7 +13,7 @@ COPY server/vite.config.js ./
 COPY server/assets ./assets
 RUN npm run build
 
-FROM elixir:1.18-alpine AS release
+FROM elixir:1.20-alpine@sha256:ef915e5ab96e620116058c3b6002510227e4f5b57ca782296e675ee4e83d7344 AS release
 WORKDIR /build
 RUN mix local.hex --force && mix local.rebar --force
 COPY server/mix.exs server/mix.lock ./

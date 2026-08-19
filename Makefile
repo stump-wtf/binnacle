@@ -7,7 +7,7 @@
 # or by the pinned elixir docker image, so the targets work on any checkout.
 
 MIX := $(shell command -v mix >/dev/null 2>&1 && echo mix || echo docker-run-mix)
-ELIXIR_IMAGE := elixir:1.18-alpine
+ELIXIR_IMAGE := elixir:1.20-alpine
 
 build: server-build
 
