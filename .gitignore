@@ -33,3 +33,6 @@ docs-generated/
 binnacle.json
 
 .DS_Store
+
+# Agent worktrees
+.worktrees/
