@@ -17,6 +17,7 @@ defmodule Binnacle.Fleet do
   use GenServer
 
   alias Binnacle.Fleet.Config
+  alias Binnacle.Fleet.Discovery
   alias Binnacle.Fleet.Model
   alias Binnacle.Fleet.Proxmox.Poller
   alias Binnacle.Fleet.Sampler
@@ -99,16 +100,26 @@ defmodule Binnacle.Fleet do
 
   @impl true
   def init(opts) do
-    baseline = Keyword.get(opts, :baseline, baseline_path())
+    {sites, hosts, guests, containers, hw, proxmox_keys} =
+      case discover_fleet(opts) do
+        {:discovered, discovered} ->
+          Logger.info("Fleet topology discovered from live APIs: #{length(discovered.hosts)} hosts, #{length(discovered.guests)} guests")
+          {discovered.sites, discovered.hosts, discovered.guests, [], %{}, MapSet.new(Enum.map(discovered.hosts, & &1.key))}
 
-    %Config{
-      sites: sites,
-      hosts: hosts,
-      guests: guests,
-      containers: containers,
-      hardware: hw,
-      proxmox: proxmox
-    } = Config.load!(baseline)
+        :fallback ->
+          baseline = Keyword.get(opts, :baseline, baseline_path())
+
+          %Config{
+            sites: sites,
+            hosts: hosts,
+            guests: guests,
+            containers: containers,
+            hardware: hw,
+            proxmox: proxmox
+          } = Config.load!(baseline)
+
+          {sites, hosts, guests, containers, hw, MapSet.new(Map.keys(proxmox))}
+      end
 
     tick = 0
 
@@ -120,7 +131,7 @@ defmodule Binnacle.Fleet do
       containers: containers,
       hardware: hw,
       history: %{},
-      proxmox: MapSet.new(Map.keys(proxmox)),
+      proxmox: proxmox_keys,
       misses: %{},
       unreachable: MapSet.new()
     }
@@ -128,6 +139,26 @@ defmodule Binnacle.Fleet do
     state = sample(state)
     :timer.send_interval(@sample_ms, :tick)
     {:ok, state}
+  end
+
+  defp discover_fleet(_opts) do
+    proxmox_nodes = Application.get_env(:binnacle, :proxmox_nodes, [])
+    unifi = Application.get_env(:binnacle, :unifi)
+    site_map = Application.get_env(:binnacle, :site_map, %{})
+    site_kinds = Application.get_env(:binnacle, :site_kinds, %{})
+
+    parsed_nodes =
+      Enum.map(proxmox_nodes, fn node ->
+        %{name: node["name"], url: node["url"], token: node["token"]}
+      end)
+
+    case Discovery.discover(proxmox_nodes: parsed_nodes, unifi: unifi, site_map: site_map, site_kinds: site_kinds) do
+      {:ok, result} -> {:discovered, result}
+      nil -> :fallback
+      {:error, reason} ->
+        Logger.warning("Fleet discovery failed, falling back to baseline: #{reason}")
+        :fallback
+    end
   end
 
   @impl true

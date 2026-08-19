@@ -122,3 +122,45 @@ end
 if burst = System.get_env("BINNACLE_API_BURST") do
   config :binnacle, api_rate_burst: String.to_integer(burst)
 end
+
+# Live fleet discovery (replaces baseline.json when configured).
+# FLEET_PROXMOX_NODES: JSON array of {name, url, token} objects.
+#   Example: [{"name":"lir","url":"https://lir.stump.rocks:8006","token":"user@pam!id=secret"}]
+# FLEET_UNIFI_URL + FLEET_UNIFI_API_KEY: UniFi controller for site discovery.
+# FLEET_SITE_MAP: JSON object mapping host key → site slug.
+#   Example: {"lir":"wynberg","dagda":"wynberg","lotor":"dtw"}
+# FLEET_SITE_KINDS: JSON object mapping site slug → kind ("home" or "airbnb").
+#   Example: {"wynberg":"home","dtw":"airbnb"}
+
+if nodes_json = System.get_env("FLEET_PROXMOX_NODES") do
+  case Jason.decode(nodes_json) do
+    {:ok, nodes} when is_list(nodes) ->
+      config :binnacle, proxmox_nodes: nodes
+
+    {:error, _} ->
+      raise ArgumentError, "FLEET_PROXMOX_NODES must be a valid JSON array"
+  end
+end
+
+if unifi_url = System.get_env("FLEET_UNIFI_URL") do
+  api_key = System.get_env("FLEET_UNIFI_API_KEY") || raise ArgumentError, "FLEET_UNIFI_API_KEY required when FLEET_UNIFI_URL is set"
+  config :binnacle, unifi: %{url: unifi_url, api_key: api_key}
+end
+
+if map_json = System.get_env("FLEET_SITE_MAP") do
+  case Jason.decode(map_json) do
+    {:ok, map} when is_map(map) -> config :binnacle, site_map: map
+    {:error, _} -> raise ArgumentError, "FLEET_SITE_MAP must be a valid JSON object"
+  end
+end
+
+if kinds_json = System.get_env("FLEET_SITE_KINDS") do
+  case Jason.decode(kinds_json) do
+    {:ok, kinds} when is_map(kinds) ->
+      atom_kinds = Map.new(kinds, fn {k, v} -> {k, String.to_atom(v)} end)
+      config :binnacle, site_kinds: atom_kinds
+
+    {:error, _} ->
+      raise ArgumentError, "FLEET_SITE_KINDS must be a valid JSON object"
+  end
+end
