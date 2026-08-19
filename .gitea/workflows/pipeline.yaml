@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     # node:22 (full, not -alpine) because the npm resolution of the asset
     # tree shells out to git for at least one dependency.
-    container: node:22
+    container: node:22@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a
     steps:
       - uses: actions/checkout@v4
       - name: Build asset bundle

@@ -170,7 +170,7 @@ jobs:
 
       - if: ${{ env.REG != '' }}
         name: Trivy image scan
-        uses: docker://aquasec/trivy:latest
+        uses: docker://aquasec/trivy:latest@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
         with:
           args: image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --skip-version-check --format table ${{ env.IMAGE }}:scan-${{ gitea.run_id }}
 

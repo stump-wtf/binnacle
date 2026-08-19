@@ -5,7 +5,7 @@
 #
 # amd64 only, deliberately (like stump.wtf/cairn): binnacle deploys to ie02,
 # which is amd64. Revisit if binnacle ever lands on an arm host.
-FROM node:22-alpine AS assets
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS assets
 WORKDIR /build
 COPY server/package.json server/package-lock.json ./
 RUN npm ci

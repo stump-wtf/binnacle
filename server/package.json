@@ -9,12 +9,12 @@
     "dev": "vite build --watch --mode development"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "daisyui": "^5.7.17",
-    "tailwindcss": "^4.3.3",
-    "vite": "^7.3.6",
-    "phoenix": "^1.8.0",
-    "phoenix_live_view": "^1.2.0"
+    "@tailwindcss/vite": "4.3.3",
+    "daisyui": "5.7.18",
+    "tailwindcss": "4.3.3",
+    "vite": "7.3.6",
+    "phoenix": "1.8.11",
+    "phoenix_live_view": "1.2.9"
   },
   "engines": {
     "node": ">=20"
