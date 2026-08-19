@@ -109,6 +109,12 @@ if token = System.get_env("BINNACLE_API_TOKEN") do
   config :binnacle, api_token: token
 end
 
+# Baseline fleet config path override (the deployment mounts its fleet
+# baseline as a compose secret file; the bundled fixture is the default).
+if baseline = System.get_env("BINNACLE_BASELINE") do
+  config :binnacle, baseline: baseline
+end
+
 if rate = System.get_env("BINNACLE_API_RATE") do
   config :binnacle, api_rate_per_second: String.to_integer(rate)
 end
