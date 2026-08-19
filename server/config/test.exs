@@ -21,3 +21,6 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Deterministic API test auth (SPEC-0001 tests).
+config :binnacle, api_token: "test-token", api_rate_burst: 100_000

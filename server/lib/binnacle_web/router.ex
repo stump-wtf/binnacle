@@ -12,6 +12,8 @@ defmodule BinnacleWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug BinnacleWeb.Plugs.RateLimit
+    plug BinnacleWeb.Plugs.ApiAuth
   end
 
   scope "/", BinnacleWeb do
@@ -21,8 +23,19 @@ defmodule BinnacleWeb.Router do
     live "/gallery", GalleryLive, :gallery
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", BinnacleWeb do
-  #   pipe_through :api
-  # end
+  # Read-only taxonomy API (SPEC-0001). GET only; anything else on /api
+  # answers 405 via the catch-all below.
+  scope "/api", BinnacleWeb do
+    pipe_through :api
+
+    get "/sites", SiteController, :index
+    get "/sites/:slug", SiteController, :show
+    get "/hosts/:key", HostController, :show
+    get "/guests/:id", GuestController, :show
+
+    match :*, "/*_path", SiteController, :method_not_allowed
+  end
+
+  # Public liveness probe — deliberately outside the :api pipeline.
+  get "/healthz", BinnacleWeb.HealthController, :show
 end

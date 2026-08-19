@@ -99,3 +99,20 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
+
+# API auth + rate limiting (SPEC-0001). The bearer token is env-only:
+# never in the baseline config file, never logged. Unset token = API fails
+# closed; /healthz stays public either way.
+# Env vars are only applied when set so test config is not clobbered by
+# runtime loading.
+if token = System.get_env("BINNACLE_API_TOKEN") do
+  config :binnacle, api_token: token
+end
+
+if rate = System.get_env("BINNACLE_API_RATE") do
+  config :binnacle, api_rate_per_second: String.to_integer(rate)
+end
+
+if burst = System.get_env("BINNACLE_API_BURST") do
+  config :binnacle, api_rate_burst: String.to_integer(burst)
+end

@@ -41,7 +41,11 @@ defmodule BinnacleWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    # SPEC-0001: reject request bodies over 1 MB.
+    length: 1_000_000
+
+  plug BinnacleWeb.Plugs.SecurityHeaders
 
   plug Plug.MethodOverride
   plug Plug.Head
