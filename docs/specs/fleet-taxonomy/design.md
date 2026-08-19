@@ -2,13 +2,13 @@
 
 ## Context
 
-binnacle is a greenfield Gren full-stack application (ADR-0001): a Node server, a browser SPA, and a shared `packages/core` holding the wire contract. This spec (SPEC-0001) implements ADR-0002's taxonomy — Site → Host → Guest → Container with hardware attachments — as binnacle's first capability. The fleet it models: per site (home or Airbnb, normalized name) one UniFi gateway, one Home Assistant, and one or more Proxmox hosts; Ubuntu VMs on Proxmox running Docker containers fronted by Caddy; hardware sometimes passed through to a VM.
+binnacle is a greenfield Elixir/Phoenix application (ADR-0004): LiveViews over a fleet domain context. (This design was drafted against the Gren base of ADR-0001; the storage and wiring notes below carry over.) This spec (SPEC-0001) implements ADR-0002's taxonomy — Site → Host → Guest → Container with hardware attachments — as binnacle's first capability. The fleet it models: per site (home or Airbnb, normalized name) one UniFi gateway, one Home Assistant, and one or more Proxmox hosts; Ubuntu VMs on Proxmox running Docker containers fronted by Caddy; hardware sometimes passed through to a VM.
 
 ## Goals / Non-Goals
 
 ### Goals
 
-- Express the full taxonomy as Gren custom types + JSON codecs in `packages/core`, shared by server and SPA
+- Express the full taxonomy as Elixir structs in `lib/binnacle`, shared by every LiveView
 - A hand-editable baseline JSON config that declares topology and credentials, validated at startup
 - Maximum practical discovery breadth: Proxmox (inventory, hardware, sensors, metrics, passthrough), UniFi (gateway + network devices), Docker containers per guest, HA presence
 - A drill-down UI (sites → hosts → guests → containers) with hardware panels and metrics at host and guest level
@@ -29,7 +29,7 @@ binnacle is a greenfield Gren full-stack application (ADR-0001): a Node server, 
 
 **Choice**: The baseline config is a single JSON file (`binnacle.json`), decoded by a `Config` codec in `packages/core`.
 
-**Rationale**: Gren has first-party JSON codecs and no ecosystem YAML/TOML parser (~45 packages total). Using JSON means the config validates through the same decoder machinery as the wire contract, produces the same quality of actionable decode errors, and adds zero dependencies. Hand-editing comfort is preserved by keeping the file small and by shipping a `make config-check` target that fails fast with precise errors.
+**Rationale**: JSON is the one config format Jason decodes with precise, actionable errors, and the same decoder machinery serves any future wire contract. Hand-editing comfort is preserved by keeping the file small and by shipping a `make config-check` target that fails fast with precise errors. Hand-editing comfort is preserved by keeping the file small and by shipping a `make config-check` target that fails fast with precise errors.
 
 **Alternatives considered**:
 - YAML: better hand-editing ergonomics, but requires owning a parser or a build-time conversion step — permanent tooling surface for one file
@@ -64,11 +64,11 @@ binnacle is a greenfield Gren full-stack application (ADR-0001): a Node server, 
 - SSH from server into each guest: rejected — credential sprawl across the fleet, shell-parsing fragility
 - Proxmox guest-agent exec (`qemu-ga`): rejected — depends on agent install/config per guest, awkward output handling, no clean auth boundary
 
-### Storage: SQLite via `gren-lang/node`
+### Storage: SQLite (or ETS) via the fleet context
 
 **Choice**: The server persists the inventory snapshot and a short metrics ring buffer in SQLite (first-party `Sqlite` capability). One transaction per discovery-cycle result per source.
 
-**Rationale**: The data is small (hundreds of entities, metric points in the thousands), single-writer (the TEA `update` serialization point), and must survive restarts. SQLite is in `gren-lang/node` already; no server-database dependency is justified.
+**Rationale**: The data is small (hundreds of entities, metric points in the thousands), single-writer (the fleet GenServer is the serialization point), and must survive restarts. In-memory history ships first (ADR-0005); the persistence choice lands with the storage story.
 
 **Alternatives considered**:
 - In-memory only: rejected — restart would blank the inventory and lose last-known state for degraded sources, defeating the staleness model
@@ -98,7 +98,7 @@ binnacle is a greenfield Gren full-stack application (ADR-0001): a Node server, 
 ```mermaid
 flowchart TD
     subgraph browser[Browser]
-        SPA["Gren SPA — web/<br/>drill-down: sites → hosts → guests → containers<br/>hardware panels + metrics"]
+        SPA["LiveView — web/<br/>drill-down: sites → hosts → guests → containers<br/>hardware panels + metrics"]
     end
     subgraph server["binnacle server — server/ (Node, TEA)"]
         API["HttpServer JSON API<br/>auth: bearer token<br/>/api/sites, /api/sites/{slug},<br/>/api/hosts/{key}, /api/guests/{id}"]
@@ -135,7 +135,7 @@ Config flow: `binnacle.json` → decoded by `packages/core` Config codec at star
 - **UniFi API surface varies (controller vs. cloud keys vs. Site Manager)** → v1 targets one confirmed flavor per site, declared in config; the integration isolates the difference behind one client module
 - **Per-guest probe adds a deployment surface** → the probe is read-only, token-scoped, and optional per guest (guests without it show containers as unknown, not failed)
 - **Credentials live in the config file at rest** → file permissions documented (0600, owner-only), values never serialized into API models or logs; migrating secrets to OpenBao is a tracked follow-up
-- **Pre-1.0 Gren (ADR-0001 accepted risk)** → taxonomy types are conservative (records + custom types, no fancy constraints) to minimize breaking-release surface
+- **Base stack churn (ADR-0001 → ADR-0004)** → taxonomy types are conservative plain structs to minimize coupling to any one framework
 
 ## Migration Plan
 

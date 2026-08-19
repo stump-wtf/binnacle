@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="night">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="StumpCloud fleet monitor: sites, hosts, VMs and containers with hardware metrics."
+    />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <.live_title default="binnacle">{assigns[:page_title]}</.live_title>
+
+    <!--
+      Theme bootstrap. This MUST stay inline and MUST stay above the
+      stylesheet link: it runs before first paint, so the correct palette is
+      on <html> by the time any pixel is drawn. Three-state, matching the
+      design system: an explicit choice wins, otherwise follow the OS.
+      Storing only an explicit choice is what lets a user who has not chosen
+      keep tracking their OS when it changes.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("binnacle-theme");
+          var prefersDay =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: light)").matches;
+          var theme = saved || (prefersDay ? "day" : "night");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          /* Private mode / storage disabled: the markup default (night) stands. */
+        }
+      })();
+    </script>
+
+    <!--
+      Fonts. preconnect first so the TLS handshake to the font CDN overlaps
+      CSS parsing. These are the three families the design system's
+      tokens/fonts.css would otherwise pull in via a nested remote @import —
+      see assets/styles/tokens/README.md for why they are loaded here instead.
+
+      JetBrains Mono = body/UI/code · Space Mono = display · Silkscreen = pixel accent.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Silkscreen:wght@400;700&display=swap"
+    />
+
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    </script>
+  </head>
+  <body>
+    {@inner_content}
+    <noscript>
+      <p style="font-family: monospace; padding: 2rem; color: #c9c9e8">
+        binnacle needs JavaScript — the interface is a Phoenix LiveView.
+      </p>
+    </noscript>
+  </body>
+</html>

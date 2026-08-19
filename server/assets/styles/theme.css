@@ -1,0 +1,309 @@
+/* ============================================================
+   binnacle — Bubbletea → Tailwind v4 → daisyUI bridge
+   ------------------------------------------------------------
+   Governing: ADR-0001 (Tailwind CSS v4 + daisyUI as the CSS
+   framework; classes written as plain strings from Gren).
+
+   The design system (docs/design/) is a set of CSS custom
+   properties. Tailwind v4 and daisyUI are both configured *in
+   CSS*, so this one file is the whole adapter: no JS config, no
+   generated palette, no second copy of the hex values.
+
+   Three layers, in order:
+
+     1. @theme inline  — expose the design tokens as Tailwind
+                         utility namespaces (bg-*, text-*, font-*,
+                         rounded-*, shadow-*, ease-*).
+     2. daisyUI themes — map the same tokens onto daisyUI's
+                         semantic slots, so a `btn btn-primary`
+                         is Charm purple without further work.
+     3. base layer     — the page canvas: void + Tron grid.
+
+   THE `inline` KEYWORD IS LOAD-BEARING. A plain `@theme` block
+   copies each value into a new `--color-*` property once, at
+   build time, freezing the night palette into the utility. With
+   `inline`, `bg-surface` compiles to `background-color:
+   var(--bg-surface)` — the *token*, which the design system
+   re-points under `[data-theme="day"]`. That is what makes a
+   single class correct in both themes, and it is why theming
+   needs no dark: variants anywhere in the Gren code.
+   ============================================================ */
+
+@source "../lib";
+@source "../assets/js";
+
+@theme inline {
+  /* ---- Brand + neon ---------------------------------------- */
+  --color-charm-purple:    var(--charm-purple);
+  --color-charm-purple-lo: var(--charm-purple-lo);
+  --color-charm-purple-hi: var(--charm-purple-hi);
+  --color-charm-pink:      var(--charm-pink);
+  --color-charm-pink-hi:   var(--charm-pink-hi);
+  --color-charm-fuchsia:   var(--charm-fuchsia);
+  --color-neon-cyan:       var(--neon-cyan);
+  --color-neon-cyan-hi:    var(--neon-cyan-hi);
+  --color-neon-mint:       var(--neon-mint);
+  --color-neon-mint-lo:    var(--neon-mint-lo);
+  --color-neon-gold:       var(--neon-gold);
+  --color-neon-coral:      var(--neon-coral);
+  --color-neon-lilac:      var(--neon-lilac);
+
+  /* ---- Surfaces -------------------------------------------- */
+  --color-void:       var(--bg-void);
+  --color-terminal:   var(--bg-terminal);
+  --color-surface:    var(--bg-surface);
+  --color-surface-2:  var(--bg-surface-2);
+  --color-surface-3:  var(--bg-surface-3);
+  --color-inset:      var(--bg-inset);
+
+  /* ---- Lines ----------------------------------------------- */
+  --color-line:        var(--line);
+  --color-line-dim:    var(--line-dim);
+  --color-line-bright: var(--line-bright);
+
+  /* ---- Text ------------------------------------------------ */
+  --color-bright:     var(--text-bright);
+  --color-body:       var(--text-body);
+  --color-muted:      var(--text-muted);
+  --color-dim:        var(--text-dim);
+  --color-on-accent:  var(--text-on-accent);
+
+  /* ---- Status roles (the ANSI semantics) ------------------- */
+  --color-ok:      var(--role-success);
+  --color-warn:    var(--role-warning);
+  --color-danger:  var(--role-danger);
+  --color-info:    var(--role-info);
+
+  /* ---- Type ------------------------------------------------ */
+  --font-mono:    var(--font-mono);
+  --font-display: var(--font-display);
+  --font-pixel:   var(--font-pixel);
+
+  --text-2xs:  var(--text-2xs);
+  --text-xs:   var(--text-xs);
+  --text-sm:   var(--text-sm);
+  --text-base: var(--text-base);
+  --text-md:   var(--text-md);
+  --text-lg:   var(--text-lg);
+  --text-xl:   var(--text-xl);
+  --text-2xl:  var(--text-2xl);
+  --text-3xl:  var(--text-3xl);
+  --text-4xl:  var(--text-4xl);
+  --text-5xl:  var(--text-5xl);
+
+  /* ---- Radii ----------------------------------------------- */
+  --radius-xs:   var(--radius-xs);
+  --radius-sm:   var(--radius-sm);
+  --radius-md:   var(--radius-md);
+  --radius-lg:   var(--radius-lg);
+  --radius-xl:   var(--radius-xl);
+  --radius-2xl:  var(--radius-2xl);
+
+  /* ---- Glow (the design system's substitute for elevation) -- */
+  --shadow-glow-purple: var(--glow-purple);
+  --shadow-glow-pink:   var(--glow-pink);
+  --shadow-glow-cyan:   var(--glow-cyan);
+  --shadow-glow-mint:   var(--glow-mint);
+  --shadow-glow-soft:   var(--glow-soft);
+  --shadow-window:      var(--shadow-window);
+  --shadow-panel:       var(--shadow-panel);
+
+  /* ---- Motion ---------------------------------------------- */
+  --ease-spring: var(--ease-spring);
+  --ease-out:    var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
+
+  /* ---- Layout ---------------------------------------------- */
+  --container-web:  var(--container-web);
+  --container-text: var(--container-text);
+}
+
+/* ============================================================
+   daisyUI themes
+   ------------------------------------------------------------
+   Named `night` and `day` on purpose: daisyUI switches on the
+   `data-theme` attribute, and so does the Bubbletea design
+   system. Reusing the one attribute means a single toggle flips
+   the raw tokens AND every daisyUI component together — there is
+   no second switch to keep in sync, and no state in which the
+   two disagree.
+
+   The slot values are written as var() references rather than
+   hexes so a palette change upstream lands here for free.
+   ============================================================ */
+
+@plugin "daisyui/theme" {
+  name: "night";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: var(--bg-terminal);
+  --color-base-200: var(--bg-surface);
+  --color-base-300: var(--bg-surface-2);
+  --color-base-content: var(--text-body);
+
+  --color-primary: var(--charm-purple);
+  --color-primary-content: var(--text-on-purple);
+  --color-secondary: var(--charm-pink);
+  --color-secondary-content: var(--text-on-accent);
+  --color-accent: var(--neon-cyan);
+  --color-accent-content: var(--text-on-accent);
+  --color-neutral: var(--bg-surface-2);
+  --color-neutral-content: var(--text-body);
+
+  --color-info: var(--neon-cyan);
+  --color-info-content: var(--text-on-accent);
+  --color-success: var(--neon-mint);
+  --color-success-content: var(--text-on-accent);
+  --color-warning: var(--neon-gold);
+  --color-warning-content: var(--text-on-accent);
+  --color-error: var(--neon-coral);
+  --color-error-content: var(--text-on-accent);
+
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+
+  --border: 1.5px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "day";
+  color-scheme: light;
+
+  --color-base-100: var(--bg-terminal);
+  --color-base-200: var(--bg-surface);
+  --color-base-300: var(--bg-surface-2);
+  --color-base-content: var(--text-body);
+
+  --color-primary: var(--charm-purple);
+  --color-primary-content: var(--text-on-purple);
+  --color-secondary: var(--charm-pink);
+  --color-secondary-content: var(--text-on-accent);
+  --color-accent: var(--neon-cyan);
+  --color-accent-content: var(--text-on-accent);
+  --color-neutral: var(--bg-surface-2);
+  --color-neutral-content: var(--text-body);
+
+  --color-info: var(--neon-cyan);
+  --color-info-content: var(--text-on-accent);
+  --color-success: var(--neon-mint);
+  --color-success-content: var(--text-on-accent);
+  --color-warning: var(--neon-gold);
+  --color-warning-content: var(--text-on-accent);
+  --color-error: var(--neon-coral);
+  --color-error-content: var(--text-on-accent);
+
+  --radius-selector: var(--radius-sm);
+  --radius-field: var(--radius-md);
+  --radius-box: var(--radius-lg);
+
+  --border: 1.5px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* ============================================================
+   Base layer — the page canvas
+   ------------------------------------------------------------
+   binnacle is a browser surface, so it speaks the design
+   system's HTML/HTMX dialect: no window chrome around the app
+   itself, mono-first type, web-scale spacing. The Tron floor
+   grid plus a soft brand glow is the signature background; it is
+   never a flat fill. Terminal chrome appears only around
+   genuinely terminal content (Ui.Terminal), never around the app.
+   ============================================================ */
+
+@layer base {
+  html {
+    /* The design system's day scope is [data-theme="day"]; night is :root.
+       color-scheme comes from the daisyUI theme blocks above. */
+    background-color: var(--bg-void);
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg-void);
+    /* Tron floor grid + brand glow bleeding from the top. Two gradients,
+       both painted from tokens so they follow the theme. */
+    background-image:
+      radial-gradient(
+        ellipse 80% 50% at 50% -10%,
+        var(--tint-primary),
+        transparent 70%
+      ),
+      linear-gradient(var(--grid-tron) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-tron) 1px, transparent 1px);
+    background-size: 100% 100%, 28px 28px, 28px 28px;
+    background-attachment: fixed;
+    color: var(--text-body);
+    font: var(--type-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    color: var(--text-bright);
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--leading-tight);
+  }
+
+  /* Focus is cyan everywhere — the design system's one focus signal. */
+  :focus-visible {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
+  }
+
+  ::selection {
+    background: var(--tint-primary);
+    color: var(--text-bright);
+  }
+}
+
+/* ============================================================
+   Utilities the token layer implies but Tailwind cannot infer
+   ------------------------------------------------------------
+   Kept deliberately small. Anything expressible as a stock
+   utility should be written as one in the Gren view code, so the
+   markup stays greppable and this file does not grow into a
+   parallel component framework.
+   ============================================================ */
+
+@utility tint-primary {
+  background-color: var(--tint-primary);
+}
+
+@utility tint-accent {
+  background-color: var(--tint-accent);
+}
+
+@utility tint-info {
+  background-color: var(--tint-info);
+}
+
+/* The blinking block cursor — the heartbeat of the system.
+   steps(1) so it snaps hard on/off the way a real terminal does,
+   never fading. */
+@utility cursor-block {
+  display: inline-block;
+  width: 0.62em;
+  height: 1.05em;
+  vertical-align: text-bottom;
+  background-color: var(--cursor);
+  animation: tui-blink var(--blink) steps(1) infinite;
+}
+
+/* Active row rail — mirrors the TUI `>` selection cursor. */
+@utility rail-active {
+  box-shadow: inset 3px 0 0 var(--charm-pink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor-block {
+    animation: none;
+  }
+}

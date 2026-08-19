@@ -148,5 +148,5 @@ The containment spine is unchanged: Site → Host → Guest → Container. Servi
 
 * Realized by SPEC-0002 (`docs/specs/service-discovery/`).
 * Extends ADR-0002 — service metadata enriches Container entities in the existing spine.
-* Related to ADR-0001 — the Gren core package gains the service-metadata codec.
+* Related to ADR-0004 — the fleet domain modules gain the service-metadata schema.
 * Expected follow-ups: manifest regeneration trigger (CI vs. converge hook), staleness thresholds, multi-inventory merging (dub + dtw + pdx).

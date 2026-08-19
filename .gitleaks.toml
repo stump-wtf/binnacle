@@ -10,4 +10,8 @@ useDefault = true
 description = "Design-doc example fixtures (no live secrets)."
 paths = [
   '''docs/.*\.md''',
+  '''server/config/(dev|test)\.exs''',
+]
+regexes = [
+  '''secret_key_base: \"[A-Za-z0-9+/=]{64,}\"''',
 ]

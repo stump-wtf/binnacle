@@ -1,0 +1,22 @@
+{
+  "name": "binnacle-server-assets",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "binnacle asset build — Vite + Tailwind v4 + daisyUI, styled with the Bubbletea TUI design system",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch --mode development"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "daisyui": "^5.7.17",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.6",
+    "phoenix": "^1.8.0",
+    "phoenix_live_view": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

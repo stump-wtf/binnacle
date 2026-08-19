@@ -1,0 +1,90 @@
+{
+  "sites": [
+    { "slug": "wynberg", "kind": "home" },
+    { "slug": "dtw", "kind": "airbnb" }
+  ],
+  "hosts": [
+    { "key": "ie01", "site": "wynberg", "dial_ip": "10.0.30.11" },
+    { "key": "pie01", "site": "wynberg", "dial_ip": "10.0.30.12" },
+    { "key": "ogma", "site": "wynberg", "dial_ip": "10.0.30.13" },
+    { "key": "hud01", "site": "wynberg", "dial_ip": "10.0.30.14" },
+    { "key": "buoy", "site": "dtw", "dial_ip": "10.0.80.10" }
+  ],
+  "guests": [
+    { "vmid": 101, "host": "ie01", "name": "ie01-guest-1" },
+    { "vmid": 201, "host": "ogma", "name": "pve-services" },
+    { "vmid": 202, "host": "ogma", "name": "pve-media" }
+  ],
+  "containers": [
+    { "id": "caddy-101", "guest": 101, "name": "caddy" },
+    { "id": "cairn-201", "guest": 201, "name": "cairn" },
+    { "id": "outline-201", "guest": 201, "name": "outline" },
+    { "id": "msgbrowse-201", "guest": 201, "name": "msgbrowse" },
+    { "id": "navidrome-202", "guest": 202, "name": "navidrome" },
+    { "id": "bazarr-202", "guest": 202, "name": "bazarr" }
+  ],
+  "hardware": [
+    {
+      "node": "ie01",
+      "name": "nvme0",
+      "kind": "disk",
+      "model": "Samsung PM9A3 960G",
+      "smart": "ok"
+    },
+    {
+      "node": "ie01",
+      "name": "cpu package",
+      "kind": "sensor",
+      "model": "N100"
+    },
+    {
+      "node": "pie01",
+      "name": "nvme0",
+      "kind": "disk",
+      "model": "WD SN730 256G",
+      "smart": "ok"
+    },
+    {
+      "node": "ogma",
+      "name": "nvme0",
+      "kind": "disk",
+      "model": "Crucial CT500P3SSD8",
+      "smart": "ok"
+    },
+    {
+      "node": "ogma",
+      "name": "sda",
+      "kind": "disk",
+      "model": "WDC WD40EFRX",
+      "smart": "warn"
+    },
+    {
+      "node": "ogma",
+      "name": "gpu0",
+      "kind": "gpu",
+      "model": "GTX 1650"
+    },
+    {
+      "node": 201,
+      "name": "pt-hba",
+      "kind": "disk",
+      "model": "LSI 9300-8i (passed through)",
+      "passthrough": true,
+      "smart": "ok"
+    },
+    {
+      "node": "hud01",
+      "name": "nvme0",
+      "kind": "disk",
+      "model": "Kingston A400",
+      "smart": "unknown"
+    },
+    {
+      "node": "buoy",
+      "name": "nvme0",
+      "kind": "disk",
+      "model": "Crucial CT1000P3PSSD8",
+      "smart": "unknown"
+    }
+  ]
+}

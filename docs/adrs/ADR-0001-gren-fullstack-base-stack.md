@@ -1,10 +1,13 @@
 ---
-status: proposed
+status: superseded
+superseded-by: ADR-0004
 date: 2026-08-15
 decision-makers: [joestump]
 ---
 
 # ADR-0001: Gren full-stack base for binnacle
+
+> **Superseded by [ADR-0004](ADR-0004-elixir-fullstack-base-stack.md)** (2026-08-18): binnacle's base stack is now Elixir + Phoenix + LiveView, still all functional programming. This ADR is kept for the record; the design-system reasoning it carried over is alive in ADR-0004.
 
 ## Context and Problem Statement
 

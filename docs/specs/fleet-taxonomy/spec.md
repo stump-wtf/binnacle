@@ -8,7 +8,7 @@ implements: [ADR-0002]
 
 ## Overview
 
-binnacle's first capability: model StumpCloud as Site → Host → Guest → Container with hardware attachments (ADR-0002), seed it from a baseline JSON config file, enrich it with discovery from UniFi, Proxmox, per-guest Docker probes, and Home Assistant, and expose it through a drill-down UI with hardware metrics at host and guest level. Runs on the Gren full-stack base from ADR-0001.
+binnacle's first capability: model StumpCloud as Site → Host → Guest → Container with hardware attachments (ADR-0002), seed it from a baseline JSON config file, enrich it with discovery from UniFi, Proxmox, per-guest Docker probes, and Home Assistant, and expose it through a drill-down UI with hardware metrics at host and guest level. Runs on the Elixir/Phoenix base from ADR-0004 (superseding the Gren base this spec was drafted against).
 
 ## Requirements
 

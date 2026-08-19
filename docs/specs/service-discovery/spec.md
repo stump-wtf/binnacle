@@ -102,7 +102,7 @@ The system SHALL support loading manifests from multiple inventories (dub, dtw, 
 
 ### Requirement: Core Package Codec
 
-The `packages/core` Gren package (ADR-0001) SHALL include a `ServiceMetadata` type and JSON codec representing the manifest entry schema. Decoding failures MUST produce descriptive errors identifying the malformed field. The type MUST be optional on the Container type — containers without enrichment carry `Nothing`.
+The fleet domain modules (ADR-0004) SHALL include a `ServiceMetadata` struct and Jason decoder representing the manifest entry schema. Decoding failures MUST produce descriptive errors identifying the malformed field. The field MUST be optional on the Container struct — containers without enrichment carry `nil`.
 
 #### Scenario: Valid manifest entry decodes
 

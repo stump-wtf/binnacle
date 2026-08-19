@@ -9,7 +9,7 @@ extends: [ADR-0001]
 
 ## Context and Problem Statement
 
-binnacle monitors and controls StumpCloud, whose physical layout is uniform: each site (a home or an Airbnb, identified by a normalized site name) has a UniFi gateway and exactly one Home Assistant; one or more physical hosts per site run Proxmox; Ubuntu VMs run inside Proxmox and host services as Docker containers fronted by Caddy; physical devices (drives, NICs, GPUs, sensors) are sometimes passed through to a VM and sometimes kept at the host. Hosts never span sites. What entity model do we standardize on so that discovery, navigation, and hardware attribution all agree — and that lands in the shared Gren core package from ADR-0001?
+binnacle monitors and controls StumpCloud, whose physical layout is uniform: each site (a home or an Airbnb, identified by a normalized site name) has a UniFi gateway and exactly one Home Assistant; one or more physical hosts per site run Proxmox; Ubuntu VMs run inside Proxmox and host services as Docker containers fronted by Caddy; physical devices (drives, NICs, GPUs, sensors) are sometimes passed through to a VM and sometimes kept at the host. Hosts never span sites. What entity model do we standardize on so that discovery, navigation, and hardware attribution all agree — and that lands in the shared domain modules from the base stack (ADR-0001, now ADR-0004)?
 
 ## Decision Drivers
 
@@ -17,7 +17,7 @@ binnacle monitors and controls StumpCloud, whose physical layout is uniform: eac
 * Passthrough means a physical device's home is either the host or one specific VM; metrics must be attributed where the device actually lives, at either level.
 * Integrations are naturally scoped: UniFi gateway + API key per site; Proxmox admin API per host, many hosts to one site; one Home Assistant per site.
 * Normalized site names are the existing join key across StumpCloud (Caddy site labels, DNS, naming conventions) — the taxonomy must adopt them, not invent a parallel naming scheme.
-* The model must be expressible as Gren custom types + JSON codecs in `packages/core` (ADR-0001), with invariants the compiler can check.
+* The model must be expressible as Elixir structs in `lib/binnacle` (ADR-0004), with invariants the compiler and dialyzer can check.
 * Discovery should be as broad as possible, but membership (what exists, where) must stay a deliberate, config-declared act.
 
 ## Considered Options
