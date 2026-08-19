@@ -83,6 +83,28 @@ defmodule Binnacle.FleetTest do
       refute @baseline |> File.read!() |> Jason.decode!() |> inspect() =~
                ~r/token|api[_-]?key|password/i
     end
+
+    # A release runs with cwd=/app, where priv lives under
+    # lib/binnacle-<vsn>/priv rather than ./priv. The default baseline was
+    # cwd-relative, so Binnacle.Fleet booted fine here and died with :enoent in
+    # the container — a crash no test saw, because every test runs from
+    # server/. Driving init/1 from a foreign cwd is what pins it.
+    #
+    # Inside a Task so the sample interval init/1 arms dies with the process;
+    # safe in this module because it is async: false, and File.cd! moves the
+    # cwd for the whole VM.
+    test "init resolves the baseline from a cwd that is not the project root" do
+      task =
+        Task.async(fn ->
+          File.cd!(System.tmp_dir!(), fn ->
+            refute File.exists?(@baseline), "the cwd-relative path must not be what resolves"
+            Fleet.init([])
+          end)
+        end)
+
+      assert {:ok, state} = Task.await(task)
+      assert Enum.count(state.hosts) == 5
+    end
   end
 
   describe "roll-up" do
