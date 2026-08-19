@@ -23,7 +23,7 @@ COPY server/lib ./lib
 COPY server/priv ./priv
 RUN mix compile --warnings-as-errors && mix release --overwrite
 
-FROM alpine:3.20
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ENV PHX_SERVER=true PORT=8080
 WORKDIR /app
 # The release needs openssl at runtime for crypto; that is the only system
