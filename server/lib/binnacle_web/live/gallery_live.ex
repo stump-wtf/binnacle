@@ -51,10 +51,17 @@ defmodule BinnacleWeb.GalleryLive do
   # including a down host and an unknown one, since those are the states most
   # likely to be styled carelessly and never looked at.
   @hosts [
-    %{name: "ie01", site: "wynberg", status: :up, cpu: 34.2, memory: 61.8, temp_c: 52},
-    %{name: "pie01", site: "wynberg", status: :up, cpu: 12, memory: 44.1, temp_c: 47.5},
+    %{name: "lir", site: "wynberg", status: :up, cpu: 34.2, memory: 61.8, temp_c: 52},
+    %{name: "dagda", site: "wynberg", status: :up, cpu: 22.1, memory: 48.3, temp_c: 49},
     %{name: "ogma", site: "wynberg", status: :degraded, cpu: 88.4, memory: 79.2, temp_c: 81},
-    %{name: "hud01", site: "wynberg", status: :unknown, cpu: 0, memory: 0, temp_c: 0},
+    %{name: "nyma", site: "wynberg", status: :unknown, cpu: 0, memory: 0, temp_c: 0},
+    %{name: "pidge", site: "wynberg", status: :up, cpu: 3.8, memory: 10.5, temp_c: 36},
+    %{name: "pie01", site: "wynberg", status: :up, cpu: 12, memory: 44.1, temp_c: 47.5},
+    %{name: "pie02", site: "wynberg", status: :up, cpu: 8.3, memory: 38.2, temp_c: 44},
+    %{name: "kitt", site: "wynberg", status: :up, cpu: 15.6, memory: 52.3, temp_c: 55},
+    %{name: "bender", site: "wynberg", status: :up, cpu: 42.1, memory: 68.7, temp_c: 62},
+    %{name: "lotor", site: "dtw", status: :up, cpu: 18.4, memory: 35.6, temp_c: 45},
+    %{name: "coran", site: "dtw", status: :up, cpu: 14.2, memory: 31.8, temp_c: 43},
     %{name: "buoy", site: "dtw", status: :down, cpu: 0, memory: 96.5, temp_c: 91.2}
   ]
 

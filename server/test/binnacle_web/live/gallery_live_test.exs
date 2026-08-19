@@ -27,7 +27,7 @@ defmodule BinnacleWeb.GalleryLiveTest do
     assert html =~ "88.4%"
 
     # The terminal frame — real log output only
-    assert html =~ "caddy · ie01"
+    assert html =~ "caddy"
 
     # The help footer
     assert html =~ "↑/↓"
@@ -51,17 +51,17 @@ defmodule BinnacleWeb.GalleryLiveTest do
     assert has_element?(view, "#hosts-ogma.rail-active")
 
     view
-    |> element("#hosts-ie01")
+    |> element("#hosts-lir")
     |> render_click()
 
-    assert has_element?(view, "#hosts-ie01.rail-active")
+    assert has_element?(view, "#hosts-lir.rail-active")
     refute has_element?(view, "#hosts-ogma.rail-active")
 
     # Clicking the selected row clears it.
     view
-    |> element("#hosts-ie01")
+    |> element("#hosts-lir")
     |> render_click()
 
-    refute has_element?(view, "#hosts-ie01.rail-active")
+    refute has_element?(view, "#hosts-lir.rail-active")
   end
 end

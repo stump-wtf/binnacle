@@ -20,8 +20,18 @@ defmodule Binnacle.Fleet.Model do
   end
 
   defmodule Guest do
-    @moduledoc "A VM. Re-parents (migration) by changing `host`; identity is `vmid`."
+    @moduledoc """
+    A VM or LXC container. Identity is `"vmid@host"` — unique across standalone
+    hypervisors that may share vmid numbers. Re-parents (migration) by changing
+    `host`.
+    """
     defstruct [:vmid, :host, :name, :containers, :hardware, :status]
+
+    @type t :: %__MODULE__{}
+
+    @doc "The composite guest reference: `\"vmid@host\"`."
+    @spec ref(t()) :: String.t()
+    def ref(%__MODULE__{vmid: vmid, host: host}), do: "#{vmid}@#{host}"
   end
 
   defmodule Container do
