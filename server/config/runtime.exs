@@ -124,36 +124,65 @@ if burst = System.get_env("BINNACLE_API_BURST") do
 end
 
 # Live fleet discovery (replaces baseline.json when configured).
-# FLEET_PROXMOX_NODES: JSON array of {name, url, token} objects.
-#   Example: [{"name":"lir","url":"https://lir.stump.rocks:8006","token":"user@pam!id=secret"}]
-# FLEET_UNIFI_URL + FLEET_UNIFI_API_KEY: UniFi controller for site discovery.
-# FLEET_SITE_MAP: JSON object mapping host key → site slug.
-#   Example: {"lir":"wynberg","dagda":"wynberg","lotor":"dtw"}
-# FLEET_SITE_KINDS: JSON object mapping site slug → kind ("home" or "airbnb").
-#   Example: {"wynberg":"home","dtw":"airbnb"}
+#
+# Every FLEET_* value may be either the literal content or a path to a file
+# containing it (the /run/secrets compose files SPEC-0002 provisions), so
+# credentials never have to sit in `docker inspect`-visible environment
+# entries. JSON vars:
+#
+#   FLEET_PROXMOX_NODES — JSON array of {name, url, token} objects.
+#     Example: [{"name":"lir","url":"https://lir.stump.rocks:8006","token":"user@pam!id=secret"}]
+#   FLEET_SITE_MAP — JSON object mapping host key → site slug.
+#     Example: {"lir":"wynberg","dagda":"wynberg","lotor":"dtw"}
+#   FLEET_SITE_KINDS — JSON object mapping site slug → kind ("home" or "airbnb").
+#     Example: {"wynberg":"home","dtw":"airbnb"}
+#
+# UniFi: FLEET_UNIFI_URL plus either FLEET_UNIFI_API_KEY, or
+# FLEET_UNIFI_USERNAME + FLEET_UNIFI_PASSWORD (cookie login; works on
+# firmware without API-key support).
 
-if nodes_json = System.get_env("FLEET_PROXMOX_NODES") do
-  case Jason.decode(nodes_json) do
-    {:ok, nodes} when is_list(nodes) ->
-      config :binnacle, proxmox_nodes: nodes
+defmodule Binnacle.FleetRuntime do
+  @moduledoc false
 
-    {:error, _} ->
-      raise ArgumentError, "FLEET_PROXMOX_NODES must be a valid JSON array"
+  def read_env(name) do
+    case System.get_env(name) do
+      nil ->
+        nil
+
+      value ->
+        if File.exists?(value), do: String.trim(File.read!(value)), else: value
+    end
+  end
+
+  def decode_json!(name) do
+    case Jason.decode(read_env(name) || "") do
+      {:ok, decoded} -> decoded
+      {:error, _} -> raise ArgumentError, "#{name} must be valid JSON or a path to a JSON file"
+    end
   end
 end
 
-if unifi_url = System.get_env("FLEET_UNIFI_URL") do
+alias Binnacle.FleetRuntime
+
+if FleetRuntime.read_env("FLEET_PROXMOX_NODES") do
+  nodes = FleetRuntime.decode_json!("FLEET_PROXMOX_NODES")
+
+  unless is_list(nodes), do: raise(ArgumentError, "FLEET_PROXMOX_NODES must be a JSON array")
+  config :binnacle, proxmox_nodes: nodes
+end
+
+if unifi_url = FleetRuntime.read_env("FLEET_UNIFI_URL") do
   # Two credential shapes: a UDM-Pro local API key (preferred) or the
   # controller username + password, which works on firmware without API-key
   # support via cookie login. Exactly one must be present.
   credential =
     cond do
-      api_key = System.get_env("FLEET_UNIFI_API_KEY") ->
+      api_key = FleetRuntime.read_env("FLEET_UNIFI_API_KEY") ->
         %{api_key: api_key}
 
-      username = System.get_env("FLEET_UNIFI_USERNAME") ->
+      username = FleetRuntime.read_env("FLEET_UNIFI_USERNAME") ->
         password =
-          System.get_env("FLEET_UNIFI_PASSWORD") ||
+          FleetRuntime.read_env("FLEET_UNIFI_PASSWORD") ||
             raise ArgumentError, "FLEET_UNIFI_PASSWORD required when FLEET_UNIFI_USERNAME is set"
 
         %{username: username, password: password}
@@ -166,20 +195,15 @@ if unifi_url = System.get_env("FLEET_UNIFI_URL") do
   config :binnacle, unifi: Map.put(credential, :url, unifi_url)
 end
 
-if map_json = System.get_env("FLEET_SITE_MAP") do
-  case Jason.decode(map_json) do
-    {:ok, map} when is_map(map) -> config :binnacle, site_map: map
-    {:error, _} -> raise ArgumentError, "FLEET_SITE_MAP must be a valid JSON object"
-  end
+if FleetRuntime.read_env("FLEET_SITE_MAP") do
+  site_map = FleetRuntime.decode_json!("FLEET_SITE_MAP")
+  unless is_map(site_map), do: raise(ArgumentError, "FLEET_SITE_MAP must be a JSON object")
+  config :binnacle, site_map: site_map
 end
 
-if kinds_json = System.get_env("FLEET_SITE_KINDS") do
-  case Jason.decode(kinds_json) do
-    {:ok, kinds} when is_map(kinds) ->
-      atom_kinds = Map.new(kinds, fn {k, v} -> {k, String.to_atom(v)} end)
-      config :binnacle, site_kinds: atom_kinds
-
-    {:error, _} ->
-      raise ArgumentError, "FLEET_SITE_KINDS must be a valid JSON object"
-  end
+if FleetRuntime.read_env("FLEET_SITE_KINDS") do
+  kinds = FleetRuntime.decode_json!("FLEET_SITE_KINDS")
+  unless is_map(kinds), do: raise(ArgumentError, "FLEET_SITE_KINDS must be a JSON object")
+  atom_kinds = Map.new(kinds, fn {k, v} -> {k, String.to_atom(v)} end)
+  config :binnacle, site_kinds: atom_kinds
 end
