@@ -240,14 +240,16 @@ defmodule Binnacle.Fleet do
         guests =
           Enum.filter(state.guests, &(&1.host == host.key))
           |> Enum.map(fn guest ->
+            guest_ref = Model.Guest.ref(guest)
+
             guest_containers =
-              Map.get(containers_by_guest, guest.vmid, [])
+              Map.get(containers_by_guest, guest_ref, [])
               |> Enum.map(fn c -> %{c | status: :up} end)
 
             %{
               guest
               | containers: guest_containers,
-                hardware: Map.get(state.hardware, guest.vmid, []),
+                hardware: Map.get(state.hardware, guest_ref, []),
                 status: Model.roll_up(Enum.map(guest_containers, & &1.status))
             }
           end)

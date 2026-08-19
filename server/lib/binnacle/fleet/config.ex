@@ -58,12 +58,12 @@ defmodule Binnacle.Fleet.Config do
     host_keys = Enum.map(hosts, &host_key/1)
     validate_host_membership!(hosts, MapSet.new(site_slugs))
 
-    guest_ids = Enum.map(guests, & &1["vmid"])
-    validate_unique_guests!(guest_ids)
+    guest_refs = Enum.map(guests, &guest_ref/1)
+    validate_unique_guests!(guests)
     validate_guest_membership!(guests, MapSet.new(host_keys))
-    validate_container_membership!(containers, MapSet.new(guest_ids))
+    validate_container_membership!(containers, MapSet.new(guest_refs))
 
-    nodes = MapSet.union(MapSet.new(host_keys), MapSet.new(guest_ids))
+    nodes = MapSet.union(MapSet.new(host_keys), MapSet.new(guest_refs))
 
     %__MODULE__{
       sites: Enum.map(sites, &site/1),
@@ -131,12 +131,16 @@ defmodule Binnacle.Fleet.Config do
     end)
   end
 
-  defp validate_unique_guests!(ids) do
-    case Enum.find(Enum.frequencies(ids), fn {_id, n} -> n > 1 end) do
+  defp validate_unique_guests!(guests) do
+    refs = Enum.map(guests, &guest_ref/1)
+
+    case Enum.find(Enum.frequencies(refs), fn {_ref, n} -> n > 1 end) do
       nil -> :ok
-      {id, _} -> raise ArgumentError, "duplicate guest vmid in baseline config: #{id}"
+      {ref, _} -> raise ArgumentError, "duplicate guest #{ref} in baseline config"
     end
   end
+
+  defp guest_ref(%{"vmid" => vmid, "host" => host}), do: "#{vmid}@#{host}"
 
   defp validate_guest_membership!(guests, host_keys) do
     Enum.each(guests, fn guest ->
@@ -188,7 +192,7 @@ defmodule Binnacle.Fleet.Config do
   end
 
   defp container(%{"id" => id, "guest" => guest, "name" => name}) do
-    %Container{id: id, guest: guest, name: name, status: :unknown}
+    %Container{id: id, guest: to_string(guest), name: name, status: :unknown}
   end
 
   defp device_kind(kind) when kind in @device_kinds, do: String.to_atom(kind)
@@ -203,6 +207,8 @@ defmodule Binnacle.Fleet.Config do
   defp group_hardware(entries, nodes) do
     entries
     |> Enum.map(fn %{"node" => node} = entry ->
+      node_key = to_string(node)
+
       device = %HardwareDevice{
         name: entry["name"],
         kind: device_kind(entry["kind"]),
@@ -211,7 +217,7 @@ defmodule Binnacle.Fleet.Config do
         smart: Map.get(entry, "smart")
       }
 
-      {node, device}
+      {node_key, device}
     end)
     |> Enum.group_by(fn {node, _} -> node end, fn {_, device} -> device end)
     |> Map.new(fn {node, devices} ->

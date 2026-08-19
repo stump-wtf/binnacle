@@ -53,7 +53,7 @@ defmodule BinnacleWeb.ApiControllerTest do
       assert %{"sites" => sites} = json_response(conn, 200)
       wynberg = Enum.find(sites, &(&1["slug"] == "wynberg"))
       assert wynberg["kind"] == "home"
-      assert wynberg["host_count"] == 4
+      assert wynberg["host_count"] == 9
       assert wynberg["status"] in ["up", "degraded", "down", "unknown"]
     end
 
@@ -71,6 +71,7 @@ defmodule BinnacleWeb.ApiControllerTest do
       ogma = Enum.find(hosts, &(&1["key"] == "ogma"))
 
       assert ogma["guests"] |> Enum.map(& &1["name"]) |> Enum.sort() == [
+               "hud01",
                "pve-media",
                "pve-services"
              ]
@@ -91,7 +92,7 @@ defmodule BinnacleWeb.ApiControllerTest do
       assert body["key"] == "ogma"
       assert body["site"] == "wynberg"
       assert is_map_key(body, "series")
-      assert Enum.map(body["guests"], & &1["vmid"]) == [201, 202]
+      assert Enum.map(body["guests"], & &1["vmid"]) == [101, 201, 202]
     end
 
     test "404 for an unknown host", %{conn: conn} do

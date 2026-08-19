@@ -66,16 +66,16 @@ defmodule Binnacle.FleetTest do
       config = Config.load!(@baseline)
 
       assert Enum.map(config.sites, & &1.slug) == ~w(wynberg dtw)
-      assert Enum.count(config.hosts) == 5
-      assert Enum.count(config.guests) == 3
-      assert Enum.count(config.containers) == 6
+      assert Enum.count(config.hosts) == 12
+      assert Enum.count(config.guests) == 7
+      assert Enum.count(config.containers) == 5
 
       # Every host belongs to a configured site.
       slugs = MapSet.new(config.sites, & &1.slug)
       assert Enum.all?(config.hosts, &MapSet.member?(slugs, &1.site))
 
       # A passed-through device lands on its guest, not the host.
-      assert Enum.any?(config.hardware[201], & &1.passthrough)
+      assert Enum.any?(config.hardware["201@ogma"], & &1.passthrough)
       refute Enum.any?(config.hardware["ogma"] || [], & &1.passthrough)
     end
 
@@ -128,7 +128,7 @@ defmodule Binnacle.FleetTest do
         end)
 
       assert {:ok, state} = Task.await(task)
-      assert Enum.count(state.hosts) == 5
+      assert Enum.count(state.hosts) == 12
     end
   end
 
@@ -153,29 +153,35 @@ defmodule Binnacle.FleetTest do
       wynberg = Enum.find(sites, &(&1.slug == "wynberg"))
 
       hosts = wynberg.hosts
-      assert Enum.map(hosts, & &1.key) == ~w(ie01 pie01 ogma hud01)
+      host_keys = Enum.map(hosts, & &1.key)
+      assert "lir" in host_keys
+      assert "dagda" in host_keys
+      assert "ogma" in host_keys
+      assert "nyma" in host_keys
+      assert "pidge" in host_keys
+      assert "pie01" in host_keys
+      assert "pie02" in host_keys
+      assert "kitt" in host_keys
+      assert "bender" in host_keys
 
-      ie01 = Enum.find(hosts, &(&1.key == "ie01"))
-      assert %Model.Sample{} = ie01.sample
-      assert ie01.sample.cpu >= 0 and ie01.sample.cpu <= 100
-      assert is_list(ie01.series.cpu)
+      lir = Enum.find(hosts, &(&1.key == "lir"))
+      assert %Model.Sample{} = lir.sample
+      assert lir.sample.cpu >= 0 and lir.sample.cpu <= 100
+      assert is_list(lir.series.cpu)
 
       # ogma is the hot host: its rolled-up status must not be up.
       ogma = Enum.find(hosts, &(&1.key == "ogma"))
       refute ogma.status == :up
 
-      # hud01 is silent: no signal, unknown status, never down.
-      hud01 = Enum.find(hosts, &(&1.key == "hud01"))
-      assert hud01.stale
-      assert hud01.status == :unknown
-
       # buoy is the down host at the airbnb site.
       dtw = Enum.find(sites, &(&1.slug == "dtw"))
-      assert hd(dtw.hosts).status == :down
+      buoy = Enum.find(dtw.hosts, &(&1.key == "buoy"))
+      assert buoy.status == :down
 
       # Guests and containers hang off their host.
       ogma_guests = Enum.map(ogma.guests, & &1.name)
       assert "pve-services" in ogma_guests
+      assert "hud01" in ogma_guests
       containers = ogma.guests |> Enum.flat_map(& &1.containers) |> Enum.map(& &1.name)
       assert "cairn" in containers and "navidrome" in containers
     end
