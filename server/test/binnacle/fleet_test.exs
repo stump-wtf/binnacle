@@ -93,6 +93,31 @@ defmodule Binnacle.FleetTest do
     # Inside a Task so the sample interval init/1 arms dies with the process;
     # safe in this module because it is async: false, and File.cd! moves the
     # cwd for the whole VM.
+    # The init/1 guard below did not cover Binnacle.Application's other caller:
+    # poller_specs/1 was handed a separate literal "priv/fleet/baseline.json",
+    # so the release crashed on boot again with the same :enoent, this time
+    # before the supervision tree came up at all. Both call sites now resolve
+    # through baseline_path/0, and this pins that.
+    test "baseline_path resolves from a cwd that is not the project root" do
+      task =
+        Task.async(fn ->
+          File.cd!(System.tmp_dir!(), fn ->
+            path = Fleet.baseline_path()
+            {Path.type(path), File.exists?(path), Fleet.poller_specs(path)}
+          end)
+        end)
+
+      assert {:absolute, true, specs} = Task.await(task)
+      assert is_list(specs)
+    end
+
+    test "baseline_path honours the BINNACLE_BASELINE override" do
+      Application.put_env(:binnacle, :baseline, "/somewhere/else/baseline.json")
+      on_exit(fn -> Application.delete_env(:binnacle, :baseline) end)
+
+      assert Fleet.baseline_path() == "/somewhere/else/baseline.json"
+    end
+
     test "init resolves the baseline from a cwd that is not the project root" do
       task =
         Task.async(fn ->
