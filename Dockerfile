@@ -15,26 +15,29 @@ RUN npm run build
 
 FROM elixir:1.20-alpine@sha256:ef915e5ab96e620116058c3b6002510227e4f5b57ca782296e675ee4e83d7344 AS release
 WORKDIR /build
+# MIX_ENV=prod for the whole stage, hoisted above deps.compile. Setting it
+# just before `mix compile` fixes the build but leaves deps.compile running
+# as :dev — so it populates _build/dev, `mix compile` finds nothing reusable
+# in _build/prod, and every dependency is compiled a second time. Declared
+# once here so `--only $MIX_ENV` cannot drift from the release env.
+ENV MIX_ENV=prod
 RUN mix local.hex --force && mix local.rebar --force
 COPY server/mix.exs server/mix.lock ./
-RUN mix deps.get --only prod && mix deps.compile
+RUN mix deps.get --only $MIX_ENV && mix deps.compile
 COPY server/config ./config
 COPY server/lib ./lib
 COPY server/priv ./priv
-ENV MIX_ENV=prod
 RUN mix compile --warnings-as-errors && mix release --overwrite
 
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 ENV PHX_SERVER=true PORT=8080
 WORKDIR /app
-# The release needs openssl at runtime for crypto; that is the only system
-# dependency a Phoenix release has.
+# Runtime system dependencies of an Erlang/OTP release on musl: openssl for
+# :crypto, libstdc++ for the NIFs, and ncurses-libs because beam.smp links
+# libncursesw and exits 127 without it.
 RUN apk add --no-cache openssl libstdc++ ncurses-libs && adduser -D -u 1000 binnacle
 COPY --from=release --chown=binnacle:binnacle /build/_build/prod/rel/binnacle ./
 COPY --from=assets --chown=binnacle:binnacle /build/priv/static/assets ./priv/static/assets
-# The release bundles priv/ at lib/<app>-<vsn>/priv/, but File.read! resolves
-# relative to cwd (/app). Copy baseline.json so the fleet GenServer finds it.
-COPY server/priv/fleet/baseline.json /app/priv/fleet/baseline.json
 USER binnacle
 EXPOSE 8080
 # $PORT, not a hardcoded 8080: the endpoint honours the env var (runtime.exs),

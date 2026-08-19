@@ -20,7 +20,7 @@ defmodule Binnacle.Fleet do
 
   @sample_ms 5_000
   @history_len 120
-  @default_baseline "priv/fleet/baseline.json"
+  @default_baseline_path "fleet/baseline.json"
 
   # Enrichment profile per host key: :hot (degraded-ish), :silent (unknown),
   # or :plain. Stand-in for discovery, keyed like the real fleet.
@@ -51,9 +51,17 @@ defmodule Binnacle.Fleet do
 
   # ---- GenServer -----------------------------------------------------------
 
+  # Resolved at runtime, not as a module attribute. `priv/fleet/baseline.json`
+  # is relative to the cwd, which is server/ under `mix phx.server` but /app in
+  # a release — where priv actually lives at lib/binnacle-<vsn>/priv. The
+  # release therefore crashed on boot with :enoent while every local run and
+  # every test passed. Application.app_dir/2 resolves correctly under both, but
+  # only if it is called at runtime: at compile time it bakes in the build path.
+  defp default_baseline, do: Application.app_dir(:binnacle, ["priv", @default_baseline_path])
+
   @impl true
   def init(opts) do
-    baseline = Keyword.get(opts, :baseline, @default_baseline)
+    baseline = Keyword.get(opts, :baseline, default_baseline())
 
     %Config{sites: sites, hosts: hosts, guests: guests, containers: containers, hardware: hw} =
       Config.load!(baseline)
