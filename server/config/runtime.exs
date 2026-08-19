@@ -143,11 +143,27 @@ if nodes_json = System.get_env("FLEET_PROXMOX_NODES") do
 end
 
 if unifi_url = System.get_env("FLEET_UNIFI_URL") do
-  api_key =
-    System.get_env("FLEET_UNIFI_API_KEY") ||
-      raise ArgumentError, "FLEET_UNIFI_API_KEY required when FLEET_UNIFI_URL is set"
+  # Two credential shapes: a UDM-Pro local API key (preferred) or the
+  # controller username + password, which works on firmware without API-key
+  # support via cookie login. Exactly one must be present.
+  credential =
+    cond do
+      api_key = System.get_env("FLEET_UNIFI_API_KEY") ->
+        %{api_key: api_key}
 
-  config :binnacle, unifi: %{url: unifi_url, api_key: api_key}
+      username = System.get_env("FLEET_UNIFI_USERNAME") ->
+        password =
+          System.get_env("FLEET_UNIFI_PASSWORD") ||
+            raise ArgumentError, "FLEET_UNIFI_PASSWORD required when FLEET_UNIFI_USERNAME is set"
+
+        %{username: username, password: password}
+
+      true ->
+        raise ArgumentError,
+              "FLEET_UNIFI_API_KEY or FLEET_UNIFI_USERNAME + FLEET_UNIFI_PASSWORD required when FLEET_UNIFI_URL is set"
+    end
+
+  config :binnacle, unifi: Map.put(credential, :url, unifi_url)
 end
 
 if map_json = System.get_env("FLEET_SITE_MAP") do

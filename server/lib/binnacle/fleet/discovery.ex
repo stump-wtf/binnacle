@@ -20,7 +20,9 @@ defmodule Binnacle.Fleet.Discovery do
   alias Binnacle.Fleet.Unifi.Client, as: UnifiClient
 
   @type proxmox_node :: %{name: String.t(), url: String.t(), token: String.t()}
-  @type unifi_config :: %{url: String.t(), api_key: String.t()}
+  @type unifi_config ::
+          %{url: String.t(), api_key: String.t()}
+          | %{url: String.t(), username: String.t(), password: String.t()}
   @type site_kind_map :: %{String.t() => :home | :airbnb}
 
   @doc """
@@ -50,7 +52,13 @@ defmodule Binnacle.Fleet.Discovery do
 
       true ->
         sites_result =
-          if has_unifi, do: UnifiClient.fetch_sites(unifi.url, unifi.api_key), else: {:ok, []}
+          if has_unifi,
+            do:
+              UnifiClient.fetch_sites(
+                unifi.url,
+                Map.take(unifi, [:api_key, :username, :password])
+              ),
+            else: {:ok, []}
 
         hosts_guests = discover_proxmox(proxmox_nodes)
 
