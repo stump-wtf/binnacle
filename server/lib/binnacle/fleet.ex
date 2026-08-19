@@ -81,9 +81,25 @@ defmodule Binnacle.Fleet do
   # only if it is called at runtime: at compile time it bakes in the build path.
   defp default_baseline, do: Application.app_dir(:binnacle, ["priv", @default_baseline_path])
 
+  @doc """
+  The baseline config path: the `BINNACLE_BASELINE` override if one is set,
+  otherwise the copy shipped inside the release.
+
+  Public and single-sourced on purpose. Binnacle.Application needs the same
+  path to build the Proxmox poller specs, and when it carried its own literal
+  the two drifted: the pollers got a cwd-relative `priv/fleet/baseline.json`,
+  which resolves under `mix phx.server` and does not exist in a release, so
+  the application failed to start. It also meant BINNACLE_BASELINE moved the
+  pollers' config without moving the fleet's.
+  """
+  @spec baseline_path() :: Path.t()
+  def baseline_path do
+    Application.get_env(:binnacle, :baseline) || default_baseline()
+  end
+
   @impl true
   def init(opts) do
-    baseline = Keyword.get(opts, :baseline, default_baseline())
+    baseline = Keyword.get(opts, :baseline, baseline_path())
 
     %Config{
       sites: sites,

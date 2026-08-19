@@ -121,13 +121,15 @@ jobs:
           image="${IMAGE}:scan-${{ gitea.run_id }}"
           name="binnacle-smoke-${{ gitea.run_id }}"
 
-          # A per-run host port, not a fixed one: `concurrency` groups by ref,
-          # so two branches' build jobs can share a runner, and run_id is
-          # unique per run. Computed up front rather than read back with
-          # `docker port`, which reports nothing once the container has exited
-          # — precisely the case whose logs matter most.
-          port=$(( 20000 + ${{ gitea.run_id }} % 20000 ))
-          url="http://127.0.0.1:${port}/"
+          # The probe runs INSIDE the container, not against a published host
+          # port. This runner executes job steps inside a job container on its
+          # own bridge network, so `127.0.0.1:<published-port>` from the step
+          # never reaches the smoke container — curl sat at 000 while the
+          # container happily served 200 to its own HEALTHCHECK. `wget` is
+          # already in the image (the HEALTHCHECK uses it), so `docker exec`
+          # probes the real listener with zero network plumbing. The URL
+          # matches the HEALTHCHECK's in-container target, port 8080.
+          url="http://127.0.0.1:8080/"
 
           # Trapped rather than deferred to an `if: always()` step, so the
           # container never outlives this step on any exit path — including a
@@ -146,14 +148,20 @@ jobs:
             exit 1
           }
 
-          docker run -d --name "$name" -p "127.0.0.1:${port}:8080" "$image" >/dev/null \
+          docker run -d --name "$name" "$image" >/dev/null \
             || fail "docker run failed for ${image}"
 
-          echo "probing ${url}"
+          echo "probing ${url} (in-container)"
           deadline=$((SECONDS + 30))
           status=000
           while [ "$SECONDS" -lt "$deadline" ]; do
-            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url") || status=000
+            # wget prints the response body; HTTP errors turn into a non-zero
+            # exit, so success == exit 0 == a served 200 on /.
+            if docker exec "$name" wget -qO- --timeout=3 "$url" >/dev/null 2>&1; then
+              status=200
+            else
+              status=000
+            fi
             if [ "$status" = 200 ]; then
               echo "container served HTTP 200 on / after ${SECONDS}s"
               exit 0
