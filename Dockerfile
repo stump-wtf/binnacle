@@ -29,9 +29,12 @@ ENV PHX_SERVER=true PORT=8080
 WORKDIR /app
 # The release needs openssl at runtime for crypto; that is the only system
 # dependency a Phoenix release has.
-RUN apk add --no-cache openssl libstdc++ && adduser -D -u 1000 binnacle
+RUN apk add --no-cache openssl libstdc++ ncurses-libs && adduser -D -u 1000 binnacle
 COPY --from=release --chown=binnacle:binnacle /build/_build/prod/rel/binnacle ./
 COPY --from=assets --chown=binnacle:binnacle /build/priv/static/assets ./priv/static/assets
+# The release bundles priv/ at lib/<app>-<vsn>/priv/, but File.read! resolves
+# relative to cwd (/app). Copy baseline.json so the fleet GenServer finds it.
+COPY server/priv/fleet/baseline.json /app/priv/fleet/baseline.json
 USER binnacle
 EXPOSE 8080
 # $PORT, not a hardcoded 8080: the endpoint honours the env var (runtime.exs),
