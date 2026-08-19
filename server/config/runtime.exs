@@ -143,7 +143,10 @@ if nodes_json = System.get_env("FLEET_PROXMOX_NODES") do
 end
 
 if unifi_url = System.get_env("FLEET_UNIFI_URL") do
-  api_key = System.get_env("FLEET_UNIFI_API_KEY") || raise ArgumentError, "FLEET_UNIFI_API_KEY required when FLEET_UNIFI_URL is set"
+  api_key =
+    System.get_env("FLEET_UNIFI_API_KEY") ||
+      raise ArgumentError, "FLEET_UNIFI_API_KEY required when FLEET_UNIFI_URL is set"
+
   config :binnacle, unifi: %{url: unifi_url, api_key: api_key}
 end
 

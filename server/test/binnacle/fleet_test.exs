@@ -186,4 +186,37 @@ defmodule Binnacle.FleetTest do
       assert "cairn" in containers and "navidrome" in containers
     end
   end
+
+  describe "poller_specs/0" do
+    test "builds pollers from env nodes in live-discovery mode" do
+      nodes = [
+        %{"name" => "lir", "url" => "https://lir.stump.rocks:8006", "token" => "tok-lir"},
+        %{"name" => "dagda", "url" => "https://dagda.stump.rocks:8006", "token" => "tok-dagda"}
+      ]
+
+      Application.put_env(:binnacle, :proxmox_nodes, nodes)
+      on_exit(fn -> Application.delete_env(:binnacle, :proxmox_nodes) end)
+
+      specs = Fleet.poller_specs()
+
+      assert Enum.map(specs, & &1.id) == [
+               {Binnacle.Fleet.Proxmox.Poller, "lir"},
+               {Binnacle.Fleet.Proxmox.Poller, "dagda"}
+             ]
+
+      lir = Enum.find(specs, &(&1.id == {Binnacle.Fleet.Proxmox.Poller, "lir"}))
+      assert {Binnacle.Fleet.Proxmox.Poller, :start_link, [args]} = lir.start
+      assert args[:host_key] == "lir"
+      assert args[:base_url] == "https://lir.stump.rocks:8006"
+      assert args[:token] == "tok-lir"
+    end
+
+    test "falls back to the baseline config when no env nodes are set" do
+      Application.delete_env(:binnacle, :proxmox_nodes)
+
+      specs = Fleet.poller_specs()
+
+      assert is_list(specs)
+    end
+  end
 end

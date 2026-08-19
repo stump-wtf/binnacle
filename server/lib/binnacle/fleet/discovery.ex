@@ -49,20 +49,37 @@ defmodule Binnacle.Fleet.Discovery do
         nil
 
       true ->
-        sites_result = if has_unifi, do: UnifiClient.fetch_sites(unifi.url, unifi.api_key), else: {:ok, []}
+        sites_result =
+          if has_unifi, do: UnifiClient.fetch_sites(unifi.url, unifi.api_key), else: {:ok, []}
+
         hosts_guests = discover_proxmox(proxmox_nodes)
 
         case sites_result do
           {:ok, discovered_sites} ->
-            sites = apply_site_kinds(discovered_sites, site_kinds)
-            hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
-            {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
+            # Total-outage guard: zero sites and zero reachable hypervisors
+            # means nothing answered — fall back to baseline rather than
+            # wiping the topology.
+            if discovered_sites == [] and hosts_guests.ok == 0 do
+              {:error,
+               "no API source produced topology (#{length(proxmox_nodes)} Proxmox nodes configured, all failed or none set; UniFi returned no sites)"}
+            else
+              sites = apply_site_kinds(discovered_sites, site_kinds)
+              hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
+              {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
+            end
 
           {:error, reason} ->
-            Logger.warning("UniFi site discovery failed: #{reason}")
-            sites = fallback_sites_from_hosts(hosts_guests.hosts, site_map, site_kinds)
-            hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
-            {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
+            # Total-outage guard: credentials are configured but nothing
+            # answered. An empty {:ok, _} here would wipe the topology; the
+            # Fleet falls back to baseline.json instead.
+            if hosts_guests.ok == 0 do
+              {:error, "all configured API sources failed (UniFi: #{reason})"}
+            else
+              Logger.warning("UniFi site discovery failed: #{reason}")
+              sites = fallback_sites_from_hosts(hosts_guests.hosts, site_map, site_kinds)
+              hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
+              {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
+            end
         end
     end
   end
@@ -94,7 +111,7 @@ defmodule Binnacle.Fleet.Discovery do
     hosts = for {:ok, host, _guests} <- results, do: host
     guests = for {:ok, _host, guest_list} <- results, guest <- guest_list, do: guest
 
-    %{hosts: hosts, guests: guests}
+    %{hosts: hosts, guests: guests, ok: length(hosts)}
   end
 
   defp apply_site_kinds(sites, kinds) when map_size(kinds) == 0, do: sites
@@ -115,9 +132,11 @@ defmodule Binnacle.Fleet.Discovery do
       mapped_site = Map.get(site_map, host.key, "default")
 
       site =
-        if MapSet.member?(site_slugs, mapped_site),
-          do: mapped_site,
-          else: List.first(sites).slug || "default"
+        cond do
+          MapSet.member?(site_slugs, mapped_site) -> mapped_site
+          sites == [] -> "default"
+          true -> List.first(sites).slug || "default"
+        end
 
       %{host | site: site}
     end)

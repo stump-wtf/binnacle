@@ -58,6 +58,31 @@ defmodule Binnacle.Fleet do
   end
 
   @doc """
+  Child specs for the Proxmox pollers, one per host with API credentials.
+
+  In live-discovery mode (FLEET_PROXMOX_NODES configured) the pollers come from
+  the same env config the Fleet bootstraps its topology from — the baseline file
+  may carry no credentials at all in that mode, and without this the discovered
+  hosts would never receive an ongoing poll. Otherwise they come from the
+  baseline config as before. Hosts without a proxmox block keep the sampler feed.
+  """
+  @spec poller_specs() :: [map()]
+  def poller_specs do
+    case Application.get_env(:binnacle, :proxmox_nodes, []) do
+      [] ->
+        poller_specs(baseline_path())
+
+      nodes ->
+        for node <- nodes do
+          Supervisor.child_spec(
+            {Poller, host_key: node["name"], base_url: node["url"], token: node["token"]},
+            id: {Poller, node["name"]}
+          )
+        end
+    end
+  end
+
+  @doc """
   Child specs for the Proxmox pollers, one per host with API credentials in
   the baseline config. Hosts without a proxmox block keep the sampler feed.
   """
@@ -103,8 +128,12 @@ defmodule Binnacle.Fleet do
     {sites, hosts, guests, containers, hw, proxmox_keys} =
       case discover_fleet(opts) do
         {:discovered, discovered} ->
-          Logger.info("Fleet topology discovered from live APIs: #{length(discovered.hosts)} hosts, #{length(discovered.guests)} guests")
-          {discovered.sites, discovered.hosts, discovered.guests, [], %{}, MapSet.new(Enum.map(discovered.hosts, & &1.key))}
+          Logger.info(
+            "Fleet topology discovered from live APIs: #{length(discovered.hosts)} hosts, #{length(discovered.guests)} guests"
+          )
+
+          {discovered.sites, discovered.hosts, discovered.guests, [], %{},
+           MapSet.new(Enum.map(discovered.hosts, & &1.key))}
 
         :fallback ->
           baseline = Keyword.get(opts, :baseline, baseline_path())
@@ -152,9 +181,18 @@ defmodule Binnacle.Fleet do
         %{name: node["name"], url: node["url"], token: node["token"]}
       end)
 
-    case Discovery.discover(proxmox_nodes: parsed_nodes, unifi: unifi, site_map: site_map, site_kinds: site_kinds) do
-      {:ok, result} -> {:discovered, result}
-      nil -> :fallback
+    case Discovery.discover(
+           proxmox_nodes: parsed_nodes,
+           unifi: unifi,
+           site_map: site_map,
+           site_kinds: site_kinds
+         ) do
+      {:ok, result} ->
+        {:discovered, result}
+
+      nil ->
+        :fallback
+
       {:error, reason} ->
         Logger.warning("Fleet discovery failed, falling back to baseline: #{reason}")
         :fallback

@@ -17,7 +17,7 @@ defmodule Binnacle.Application do
         # Proxmox pollers, one per host with API credentials in the baseline
         # config (SPEC-0001). No creds = no poller; the sampler feeds instead.
       ] ++
-        Binnacle.Fleet.poller_specs(Binnacle.Fleet.baseline_path()) ++
+        Binnacle.Fleet.poller_specs() ++
         [
           # Start to serve requests, typically the last entry
           BinnacleWeb.Endpoint
