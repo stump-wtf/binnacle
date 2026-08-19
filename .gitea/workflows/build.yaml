@@ -87,6 +87,76 @@ jobs:
           tags: ${{ env.IMAGE }}:scan-${{ gitea.run_id }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
 
+      # Container Smoke Test
+      #
+      # `docker build` only proves the layers assemble; it never proves the
+      # release starts. Three boot-breaking defects reached main under a green
+      # build because of that gap: a missing `MIX_ENV=prod` (#36), a missing
+      # `ncurses-libs` so `beam.smp` exited 127, and a cwd-relative
+      # `priv/fleet/baseline.json` that only resolves under `mix phx.server`
+      # (both #37). Each one fails here, on the PR that introduces it.
+      #
+      # Runs on pull_request as well as push: the build above is `load: true`
+      # on every event, so the scan tag is a local image regardless of whether
+      # the registry push is gated off.
+      #
+      # Probes `/`, not `/healthz`, to match the Dockerfile HEALTHCHECK —
+      # there is no health route yet. If one is ever added, change both.
+      #
+      # @joestump-agent 08/19/2026 - Added the smoke test between the build
+      # and the Trivy scan. Boot is the cheaper and more fundamental signal,
+      # so it runs first: a release that cannot start is not worth scanning.
+      - if: ${{ env.REG != '' }}
+        name: Smoke test (container boots and serves /)
+        shell: bash
+        run: |
+          # No `set -e`: the poll loop uses `[ ... ] && break`, whose false
+          # branch would abort the step rather than keep polling.
+          set -uo pipefail
+
+          image="${IMAGE}:scan-${{ gitea.run_id }}"
+          name="binnacle-smoke-${{ gitea.run_id }}"
+
+          # Trapped rather than deferred to an `if: always()` step, so the
+          # container never outlives this step on any exit path — including a
+          # cancelled run.
+          cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT INT TERM
+
+          # An ephemeral host port, not a fixed one: `concurrency` groups by
+          # ref, so two branches' build jobs can land on the same runner at
+          # once and a hardcoded port would collide into a spurious red.
+          docker run -d --name "$name" -p 127.0.0.1::8080 "$image" >/dev/null || {
+            echo "::error::docker run failed for ${image}"
+            exit 1
+          }
+
+          port=$(docker port "$name" 8080/tcp | head -1 | sed 's/.*://')
+          [ -n "$port" ] || { echo "::error::could not resolve the mapped host port"; exit 1; }
+          url="http://127.0.0.1:${port}/"
+          echo "probing ${url}"
+
+          deadline=$((SECONDS + 30))
+          status=000
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url") || status=000
+            [ "$status" = 200 ] && {
+              echo "container served HTTP 200 on / after ${SECONDS}s"
+              exit 0
+            }
+            # An already-exited container will never answer. Stop burning the
+            # timeout and go straight to the logs.
+            [ -z "$(docker ps -q -f "name=^${name}$")" ] && break
+            sleep 1
+          done
+
+          echo "::error::image never served HTTP 200 on / within 30s (last status: ${status})"
+          echo "--- docker ps -a ---"
+          docker ps -a -f "name=^${name}$"
+          echo "--- docker logs ---"
+          docker logs "$name" 2>&1 || true
+          exit 1
+
       - if: ${{ env.REG != '' }}
         name: Trivy image scan
         uses: docker://aquasec/trivy:latest
