@@ -12,6 +12,7 @@ defmodule Binnacle.Fleet.Config do
 
   alias Binnacle.Fleet.Model
   alias Binnacle.Fleet.Proxmox.Token
+  alias Binnacle.Fleet.Unifi.Credential
   alias Model.{Container, Guest, HardwareDevice, Host, Site}
 
   @enforce_keys [:sites, :hosts, :guests, :containers, :hardware, :proxmox, :unifi]
@@ -35,7 +36,7 @@ defmodule Binnacle.Fleet.Config do
 
   @type unifi_config :: %{
           base_url: String.t(),
-          credential: map(),
+          credential: Credential.t(),
           poll_ms: non_neg_integer()
         }
 
@@ -170,7 +171,7 @@ defmodule Binnacle.Fleet.Config do
 
         %{"url" => url} = block ->
           poll_ms = Map.get(block, "poll_seconds", 60) * 1000
-          credential = unifi_credential!(block, site["slug"])
+          credential = Credential.new(unifi_credential!(block, site["slug"]))
           [{site["slug"], %{base_url: url, credential: credential, poll_ms: poll_ms}}]
 
         block ->

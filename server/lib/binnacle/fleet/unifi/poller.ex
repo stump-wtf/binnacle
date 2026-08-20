@@ -13,6 +13,7 @@ defmodule Binnacle.Fleet.Unifi.Poller do
   use GenServer
 
   alias Binnacle.Fleet.Unifi.Client
+  alias Binnacle.Fleet.Unifi.Credential
 
   @default_interval :timer.seconds(60)
 
@@ -22,18 +23,22 @@ defmodule Binnacle.Fleet.Unifi.Poller do
 
   @impl true
   def init(opts) do
-    # The credential lives in this process's state for its whole life, so the
-    # same defence the Proxmox poller documents applies: :sensitive disables
-    # tracing and message-queue inspection. Unlike a PVE token there is no
-    # single opaque value to wrap — a username/password pair is two fields —
-    # so the state map is built with the credential under a key that is never
-    # logged, and nothing in this module ever puts it in a message.
+    # The credential lives in this process's state for its whole life, so it
+    # gets both halves of the Proxmox poller's defence. :sensitive disables
+    # tracing and hides the message queue, the dictionary and the backtrace —
+    # but NOT the State line, which gen_server formats itself and which a
+    # sensitive process still logs in full. Binnacle.Fleet.Unifi.Credential is
+    # what redacts that, and the value is unwrapped only on the way to the
+    # wire.
+    #
+    # @joestump-agent 08/20/2026 - Wrapped the credential during review of
+    # #54; the sensitive flag alone left the password in every crash report.
     Process.flag(:sensitive, true)
 
     state = %{
       site: Keyword.fetch!(opts, :site),
       base_url: Keyword.fetch!(opts, :base_url),
-      credential: Keyword.fetch!(opts, :credential),
+      credential: Credential.new(Keyword.fetch!(opts, :credential)),
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval),
       fetch: Keyword.get(opts, :fetch, &Client.fetch_devices/3),
       fetch_opts: Keyword.get(opts, :fetch_opts, []),
@@ -46,7 +51,8 @@ defmodule Binnacle.Fleet.Unifi.Poller do
 
   @impl true
   def handle_info(:poll, state) do
-    result = state.fetch.(state.base_url, state.credential, state.fetch_opts)
+    result =
+      state.fetch.(state.base_url, Credential.reveal(state.credential), state.fetch_opts)
 
     # Errors are delivered too: a site whose controller stops answering must
     # say so, rather than keeping a stale inventory that looks current.

@@ -6,6 +6,7 @@ defmodule Binnacle.Fleet.SiteNetworkTest do
   alias Binnacle.Fleet
   alias Binnacle.Fleet.Config
   alias Binnacle.Fleet.Model
+  alias Binnacle.Fleet.Unifi.Credential
 
   @baseline "test/fixtures/sites_baseline.json"
 
@@ -30,8 +31,30 @@ defmodule Binnacle.Fleet.SiteNetworkTest do
       config = Config.load!(@baseline)
 
       assert config.unifi["dub"].base_url == "https://192.168.110.1"
-      assert config.unifi["dub"].credential == %{username: "ro", password: "pw"}
+
+      assert Credential.reveal(config.unifi["dub"].credential) == %{
+               username: "ro",
+               password: "pw"
+             }
+
       assert config.unifi["dub"].poll_ms == 90_000
+    end
+
+    test "the credential never renders, in a crash report or anywhere else" do
+      # SPEC-0001 REQ "Baseline Config": credentials declared in the config
+      # MUST NOT be exposed through the API, the UI, or logs. The poller's
+      # :sensitive flag does not cover the State line gen_server writes on a
+      # crash — this is what does.
+      config = Config.load!(@baseline)
+
+      refute inspect(config.unifi["dub"], limit: :infinity) =~ "pw"
+
+      state =
+        %{credential: config.unifi["dub"].credential, site: "dub"}
+        |> inspect(limit: :infinity)
+
+      refute state =~ "pw"
+      refute state =~ "ro"
     end
 
     test "a site with no unifi block gets no entry, and no poller" do
