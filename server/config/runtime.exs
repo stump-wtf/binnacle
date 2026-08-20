@@ -123,23 +123,26 @@ if burst = System.get_env("BINNACLE_API_BURST") do
   config :binnacle, api_rate_burst: String.to_integer(burst)
 end
 
-# Live fleet discovery (replaces baseline.json when configured).
+# Proxmox Poller Credentials From The Environment
 #
-# Every FLEET_* value may be either the literal content or a path to a file
-# containing it (the /run/secrets compose files SPEC-0002 provisions), so
-# credentials never have to sit in `docker inspect`-visible environment
-# entries. JSON vars:
+# Topology is declared in the baseline, never in the environment. The one
+# thing FLEET_* still carries is Proxmox poller credentials, for a deployment
+# that would rather not put tokens in the baseline file. The value may be
+# either the literal content or a path to a file containing it (the
+# /run/secrets compose files SPEC-0002 provisions), so credentials never have
+# to sit in `docker inspect`-visible environment entries.
 #
 #   FLEET_PROXMOX_NODES — JSON array of {name, url, token} objects.
 #     Example: [{"name":"lir","url":"https://lir.stump.rocks:8006","token":"user@pam!id=secret"}]
-#   FLEET_SITE_MAP — JSON object mapping host key → site slug.
-#     Example: {"lir":"wynberg","dagda":"wynberg","lotor":"dtw"}
-#   FLEET_SITE_KINDS — JSON object mapping site slug → kind ("home" or "airbnb").
-#     Example: {"wynberg":"home","dtw":"airbnb"}
 #
-# UniFi: FLEET_UNIFI_URL plus either FLEET_UNIFI_API_KEY, or
-# FLEET_UNIFI_USERNAME + FLEET_UNIFI_PASSWORD (cookie login; works on
-# firmware without API-key support).
+# @joestump-agent 08/20/2026 - Dropped FLEET_UNIFI_*, FLEET_SITE_MAP and
+# FLEET_SITE_KINDS while reviewing #54. That PR removed the code that read
+# them: sites and their kinds now come only from the baseline, and UniFi is
+# configured per site (each property runs its own controller, so a single
+# global FLEET_UNIFI_URL cannot address four of them). Left in place they
+# were env vars an operator could set, that validated, and that then did
+# nothing at all — the same silent-ignore defect #54 is about. UniFi
+# credentials belong in the site's `unifi` block; see Binnacle.Fleet.Config.
 
 defmodule Binnacle.FleetRuntime do
   @moduledoc false
@@ -169,41 +172,4 @@ if FleetRuntime.read_env("FLEET_PROXMOX_NODES") do
 
   unless is_list(nodes), do: raise(ArgumentError, "FLEET_PROXMOX_NODES must be a JSON array")
   config :binnacle, proxmox_nodes: nodes
-end
-
-if unifi_url = FleetRuntime.read_env("FLEET_UNIFI_URL") do
-  # Two credential shapes: a UDM-Pro local API key (preferred) or the
-  # controller username + password, which works on firmware without API-key
-  # support via cookie login. Exactly one must be present.
-  credential =
-    cond do
-      api_key = FleetRuntime.read_env("FLEET_UNIFI_API_KEY") ->
-        %{api_key: api_key}
-
-      username = FleetRuntime.read_env("FLEET_UNIFI_USERNAME") ->
-        password =
-          FleetRuntime.read_env("FLEET_UNIFI_PASSWORD") ||
-            raise ArgumentError, "FLEET_UNIFI_PASSWORD required when FLEET_UNIFI_USERNAME is set"
-
-        %{username: username, password: password}
-
-      true ->
-        raise ArgumentError,
-              "FLEET_UNIFI_API_KEY or FLEET_UNIFI_USERNAME + FLEET_UNIFI_PASSWORD required when FLEET_UNIFI_URL is set"
-    end
-
-  config :binnacle, unifi: Map.put(credential, :url, unifi_url)
-end
-
-if FleetRuntime.read_env("FLEET_SITE_MAP") do
-  site_map = FleetRuntime.decode_json!("FLEET_SITE_MAP")
-  unless is_map(site_map), do: raise(ArgumentError, "FLEET_SITE_MAP must be a JSON object")
-  config :binnacle, site_map: site_map
-end
-
-if FleetRuntime.read_env("FLEET_SITE_KINDS") do
-  kinds = FleetRuntime.decode_json!("FLEET_SITE_KINDS")
-  unless is_map(kinds), do: raise(ArgumentError, "FLEET_SITE_KINDS must be a JSON object")
-  atom_kinds = Map.new(kinds, fn {k, v} -> {k, String.to_atom(v)} end)
-  config :binnacle, site_kinds: atom_kinds
 end
