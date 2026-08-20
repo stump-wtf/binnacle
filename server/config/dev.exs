@@ -61,3 +61,9 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# Synthetic fleet readings (Binnacle.Fleet.Sampler): a fixture for the
+# component gallery and the tests, so meters and trend lines have data to
+# draw without a live fleet. Deliberately absent in prod — see
+# Binnacle.Fleet's moduledoc.
+config :binnacle, synthetic_metrics: true

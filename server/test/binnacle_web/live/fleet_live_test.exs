@@ -23,11 +23,6 @@ defmodule BinnacleWeb.FleetLiveTest do
     assert html =~ "<polyline"
   end
 
-  test "a silent host shows 'no signal', not a fake outage", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/")
-    assert html =~ "no signal"
-  end
-
   test "expanding a host reveals the hardware panel, devices, and guests", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/")
 

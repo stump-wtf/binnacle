@@ -5,9 +5,9 @@
   "hosts": [
     {"key": "ie01", "site": "wynberg", "dial_ip": "10.0.30.11"},
     {"key": "pve1", "site": "wynberg", "dial_ip": "10.0.30.13",
-     "proxmox": {"url": "https://10.0.30.13:8006", "token": "tok", "poll_seconds": 45}},
+     "proxmox": {"url": "https://10.0.30.13:8006", "token": "binnacle@pve!fleet=00000000-0000-4000-8000-000000000001", "poll_seconds": 45}},
     {"key": "pve2", "site": "wynberg", "dial_ip": "10.0.30.14",
-     "proxmox": {"url": "https://10.0.30.14:8006", "token": "tok2"}}
+     "proxmox": {"url": "https://10.0.30.14:8006", "token_id": "binnacle@pve!fleet", "token_secret": "00000000-0000-4000-8000-000000000002"}}
   ],
   "guests": [
     {"vmid": 101, "host": "ie01", "name": "ie01-guest-1"}

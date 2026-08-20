@@ -22,19 +22,81 @@ defmodule Binnacle.Fleet.ProxmoxTest do
 
       assert config.proxmox["pve1"] == %{
                base_url: "https://10.0.30.13:8006",
-               token: "tok",
+               token: "binnacle@pve!fleet=00000000-0000-4000-8000-000000000001",
                poll_ms: 45_000
              }
 
       refute Map.has_key?(config.proxmox, "ie01")
     end
 
-    test "rejects an incomplete proxmox block" do
+    test "composes a credential stored as separate id and secret halves" do
+      config = Binnacle.Fleet.Config.load!(@baseline)
+
+      assert config.proxmox["pve2"].token ==
+               "binnacle@pve!fleet=00000000-0000-4000-8000-000000000002"
+    end
+
+    test "rejects a token that is only the secret half, naming the host" do
+      error =
+        assert_raise ArgumentError, fn ->
+          Binnacle.Fleet.Config.new!(%{
+            "sites" => [%{"slug" => "wynberg", "kind" => "home"}],
+            "hosts" => [
+              %{
+                "key" => "lir",
+                "site" => "wynberg",
+                "proxmox" => %{
+                  "url" => "https://lir:8006",
+                  "token" => "00000000-0000-4000-8000-000000000000"
+                }
+              }
+            ]
+          })
+        end
+
+      assert error.message =~ "host lir"
+      assert error.message =~ "USER@REALM!TOKENID=SECRET"
+      # The startup error is read by humans and shipped to logs: it says what
+      # is wrong with the credential without ever containing it.
+      refute error.message =~ "00000000"
+    end
+
+    test "rejects a proxmox block with a url and no credential at all" do
+      assert_raise ArgumentError, ~r/host lir.*no credential/s, fn ->
+        Binnacle.Fleet.Config.new!(%{
+          "sites" => [%{"slug" => "wynberg", "kind" => "home"}],
+          "hosts" => [
+            %{"key" => "lir", "site" => "wynberg", "proxmox" => %{"url" => "https://lir:8006"}}
+          ]
+        })
+      end
+    end
+
+    test "rejects half of a split credential" do
+      assert_raise ArgumentError, ~r/mixing credential shapes/, fn ->
+        Binnacle.Fleet.Config.new!(%{
+          "sites" => [%{"slug" => "wynberg", "kind" => "home"}],
+          "hosts" => [
+            %{
+              "key" => "lir",
+              "site" => "wynberg",
+              "proxmox" => %{"url" => "https://lir:8006", "token_id" => "binnacle@pve!fleet"}
+            }
+          ]
+        })
+      end
+    end
+
+    test "rejects a proxmox block with no url" do
       assert_raise ArgumentError, ~r/incomplete proxmox/, fn ->
         Binnacle.Fleet.Config.new!(%{
           "sites" => [%{"slug" => "wynberg", "kind" => "home"}],
           "hosts" => [
-            %{"key" => "pve1", "site" => "wynberg", "proxmox" => %{"url" => "https://x"}}
+            %{
+              "key" => "pve1",
+              "site" => "wynberg",
+              "proxmox" => %{"token" => "binnacle@pve!fleet=aaaa-bbbb"}
+            }
           ]
         })
       end
@@ -64,6 +126,39 @@ defmodule Binnacle.Fleet.ProxmoxTest do
       assert {:ok, %{sample: sample}} = Client.fetch("https://pve", "tok", plug: plug)
       assert sample.memory == nil
       assert sample.cpu == 10.0
+    end
+  end
+
+  describe "the wire credential" do
+    # The whole `USER@REALM!TOKENID=SECRET` string is the credential; PVE
+    # answers 401 to the secret alone. This asserts the exact header value,
+    # because "it authenticates" is only observable against a real node.
+    test "the composed token goes on the wire verbatim as PVEAPIToken" do
+      token = "homepage@pve!dashboard=00000000-0000-4000-8000-000000000000"
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+
+        body =
+          case conn.request_path do
+            "/api2/json/nodes" ->
+              pve_json(%{"data" => [%{"node" => "pve1", "status" => "online"}]})
+
+            "/api2/json/nodes/pve1/status" ->
+              pve_json(%{"data" => %{"cpu" => 0.1, "memory" => %{"total" => 100, "used" => 1}}})
+
+            _ ->
+              pve_json(%{"data" => []})
+          end
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, body)
+      end
+
+      assert {:ok, _} = Client.fetch("https://pve", token, plug: plug)
+      assert_receive {:auth, ["PVEAPIToken=" <> ^token]}
     end
   end
 

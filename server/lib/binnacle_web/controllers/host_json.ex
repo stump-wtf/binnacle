@@ -11,6 +11,7 @@ defmodule BinnacleWeb.HostJSON do
       site: host.site,
       status: host.status,
       stale: host.stale,
+      telemetry: host.telemetry,
       metrics: host.sample && metrics(host.sample),
       hardware: hardware(host.hardware),
       guests: Enum.map(host.guests, &GuestJSON.guest/1)
@@ -18,7 +19,13 @@ defmodule BinnacleWeb.HostJSON do
   end
 
   def show(%{host: host}) do
-    %{key: host.key, site: host.site, status: host.status, stale: host.stale}
+    %{
+      key: host.key,
+      site: host.site,
+      status: host.status,
+      stale: host.stale,
+      telemetry: host.telemetry
+    }
     |> Map.merge(%{metrics: host.sample && metrics(host.sample)})
     |> Map.merge(%{series: host.series})
     |> Map.merge(%{

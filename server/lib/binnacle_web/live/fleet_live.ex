@@ -134,7 +134,9 @@ defmodule BinnacleWeb.FleetLive do
         </span>
         <Badge.status status={@host.status} />
         <%= if @host.stale do %>
-          <span class="font-mono text-2xs uppercase tracking-wide text-dim">no signal</span>
+          <span class="font-mono text-2xs uppercase tracking-wide text-dim">
+            {silence_label(@host.telemetry)}
+          </span>
         <% else %>
           <span class="flex items-center gap-4">
             <.reading
@@ -315,4 +317,11 @@ defmodule BinnacleWeb.FleetLive do
   defp format(value) do
     Meter.format_value(value)
   end
+
+  # A host with no telemetry source is not the same as one that stopped
+  # answering, and a fleet monitor that renders both as "no signal" invites
+  # exactly the wrong response to each.
+  defp silence_label(:unreachable), do: "unreachable"
+  defp silence_label(:none), do: "no telemetry source"
+  defp silence_label(_), do: "no signal"
 end

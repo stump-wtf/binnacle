@@ -3,10 +3,16 @@ defmodule Binnacle.Fleet do
   The fleet context: one GenServer owning the containment spine, the metrics
   history, and the sample clock.
 
-  Governing: ADR-0002 / SPEC-0001. The baseline comes from a JSON config file;
-  until live discovery lands, `Binnacle.Fleet.Sampler` produces the readings.
-  Every LiveView reads the model through `snapshot/0` — never the GenServer's
-  raw state — and the snapshot contains no credentials, ever.
+  Governing: ADR-0002 / SPEC-0001. Topology comes from a JSON config file or
+  live discovery; readings come from the pollers. Every LiveView reads the
+  model through `snapshot/0` — never the GenServer's raw state — and the
+  snapshot contains no credentials, ever.
+
+  A host binnacle has no telemetry source for reports no readings at all. It
+  does not get invented ones: `Binnacle.Fleet.Sampler` is a fixture for the
+  component gallery and the tests, enabled only by `:synthetic_metrics`, and
+  a fleet monitor that draws a plausible sine wave over a host it cannot
+  actually see is worse than one that admits it.
 
   History is a capped list per host, oldest first: `@history_len` samples is
   the window the trend lines draw (at `@sample_ms` cadence, ~10 minutes).
@@ -20,6 +26,7 @@ defmodule Binnacle.Fleet do
   alias Binnacle.Fleet.Discovery
   alias Binnacle.Fleet.Model
   alias Binnacle.Fleet.Proxmox.Poller
+  alias Binnacle.Fleet.Proxmox.Token
   alias Binnacle.Fleet.Sampler
 
   @sample_ms 5_000
@@ -28,14 +35,6 @@ defmodule Binnacle.Fleet do
   # Consecutive poll misses before a host is surfaced as unreachable
   # (SPEC-0001: never silently dropped).
   @misses_before_down 3
-
-  # Enrichment profile per host key: :hot (degraded-ish), :silent (unknown),
-  # or :plain. Stand-in for discovery, keyed like the real fleet.
-  @profiles %{
-    "ogma" => :hot,
-    "hud01" => :silent,
-    "buoy" => :down
-  }
 
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -75,7 +74,10 @@ defmodule Binnacle.Fleet do
       nodes ->
         for node <- nodes do
           Supervisor.child_spec(
-            {Poller, host_key: node["name"], base_url: node["url"], token: node["token"]},
+            {Poller,
+             host_key: node["name"],
+             base_url: node["url"],
+             token: Token.reveal(env_node_token!(node))},
             id: {Poller, node["name"]}
           )
         end
@@ -94,6 +96,24 @@ defmodule Binnacle.Fleet do
          host_key: key, base_url: cfg.base_url, token: cfg.token, interval_ms: cfg.poll_ms},
         id: {Poller, key}
       )
+    end
+  end
+
+  # FLEET_PROXMOX_NODES bypasses Binnacle.Fleet.Config, so it needs the same
+  # credential check the baseline file gets — otherwise the env path is the
+  # one way a half-token still reaches PVE and 401s on every poll.
+  defp env_node_token!(node) do
+    where = "FLEET_PROXMOX_NODES entry #{inspect(node["name"])}"
+
+    case {node["token"], node["token_id"], node["token_secret"]} do
+      {token, nil, nil} when is_binary(token) ->
+        Token.parse!(token, where)
+
+      {nil, id, secret} when is_binary(id) and is_binary(secret) ->
+        Token.compose!(id, secret, where)
+
+      _ ->
+        raise ArgumentError, "#{where} needs \"token\", or \"token_id\" + \"token_secret\""
     end
   end
 
@@ -178,7 +198,7 @@ defmodule Binnacle.Fleet do
 
     parsed_nodes =
       Enum.map(proxmox_nodes, fn node ->
-        %{name: node["name"], url: node["url"], token: node["token"]}
+        %{name: node["name"], url: node["url"], token: Token.reveal(env_node_token!(node))}
       end)
 
     case Discovery.discover(
@@ -240,11 +260,14 @@ defmodule Binnacle.Fleet do
   def handle_info({:proxmox, host_key, {:error, reason}}, state) do
     misses = Map.get(state.misses, host_key, 0) + 1
 
+    # The reason belongs in the message, not in metadata: the default console
+    # formatter is configured with metadata: [:request_id], so a reason passed
+    # as metadata is dropped and every failure logs the bare, useless line
+    # "proxmox poll failed". Reasons from the client name the failing step and
+    # never carry the credential.
     if misses >= @misses_before_down do
-      Logger.warning("proxmox poll failed",
-        host: host_key,
-        consecutive_misses: misses,
-        reason: reason
+      Logger.warning(
+        "proxmox poll failed for #{host_key} after #{misses} consecutive misses: #{reason}"
       )
     end
 
@@ -262,18 +285,28 @@ defmodule Binnacle.Fleet do
 
   # ---- sampling ------------------------------------------------------------
 
+  # The sample clock only advances history for hosts this node is *not*
+  # polling. Polled hosts are written by handle_info/2 as their results land;
+  # re-touching them here would push duplicate points between polls and blur
+  # the trend line with a slower clock's idea of "now".
   defp sample(%{hosts: hosts, tick: tick, proxmox: proxmox} = state) do
     history =
       Map.new(hosts, fn host ->
         prev = List.last(state.history[host.key] || [])
 
-        # Hosts with live Proxmox discovery get their samples from the
-        # poller; the synthetic sampler would only blur real readings.
         next =
-          if MapSet.member?(proxmox, host.key) do
-            prev
-          else
-            sample_host(host.key, tick, prev)
+          cond do
+            MapSet.member?(proxmox, host.key) ->
+              prev
+
+            synthetic?() ->
+              Sampler.sample_host(host.key, tick, prev, seed: :erlang.phash2(host.key))
+
+            # No telemetry source. nil is the honest reading: the sparkline
+            # breaks and the row says so, rather than drawing a number binnacle
+            # did not measure.
+            true ->
+              nil
           end
 
         {host.key, push_history(state.history[host.key], next)}
@@ -282,14 +315,9 @@ defmodule Binnacle.Fleet do
     %{state | history: history}
   end
 
-  defp sample_host(key, tick, prev) do
-    case Map.get(@profiles, key, :plain) do
-      :hot -> Sampler.sample_hot_host(key, tick, prev, seed: :erlang.phash2(key))
-      :silent -> Sampler.sample_silent_host()
-      :down -> Sampler.sample_silent_host()
-      :plain -> Sampler.sample_host(key, tick, prev, seed: :erlang.phash2(key))
-    end
-  end
+  # Synthetic readings are a fixture, not a fallback: on for the component
+  # gallery and the tests, off everywhere a real fleet is being watched.
+  defp synthetic?, do: Application.get_env(:binnacle, :synthetic_metrics, false)
 
   defp push_history(nil, sample), do: push_history([], sample)
 
@@ -334,31 +362,37 @@ defmodule Binnacle.Fleet do
           current = List.last(history)
           guests = Map.get(guests_by_host, host.key, [])
 
+          # Three different silences, told apart rather than merged into one
+          # "no signal". A host we poll and cannot reach is an outage; a host
+          # we have no way to measure is a gap in binnacle's coverage and must
+          # not read as either an outage or as healthy.
+          telemetry =
+            cond do
+              MapSet.member?(state.unreachable, host.key) -> :unreachable
+              MapSet.member?(state.proxmox, host.key) -> :live
+              true -> :none
+            end
+
           host_status =
             cond do
-              MapSet.member?(state.unreachable, host.key) ->
+              telemetry == :unreachable ->
                 :down
 
               current ->
                 Model.roll_up([
-                  host_profile_status(host.key),
                   Model.sample_status(current),
                   Model.roll_up(Enum.map(guests, & &1.status))
                 ])
 
               true ->
-                # No signal from the host itself. Its children may still be
+                # No reading from the host itself. Its children may still be
                 # reporting, but "no reading and no complaints" is :unknown,
-                # not :up — unless the profile says it is actually down.
-                case Model.roll_up([
-                       host_profile_status(host.key) | Enum.map(guests, & &1.status)
-                     ]) do
+                # not :up.
+                case Model.roll_up(Enum.map(guests, & &1.status)) do
                   :up -> :unknown
                   other -> other
                 end
             end
-
-          host_stale = current == nil or MapSet.member?(state.unreachable, host.key)
 
           %{
             host
@@ -370,7 +404,8 @@ defmodule Binnacle.Fleet do
           |> Map.merge(%{
             sample: current,
             series: series(history),
-            stale: host_stale
+            telemetry: telemetry,
+            stale: current == nil or telemetry == :unreachable
           })
         end)
 
@@ -378,10 +413,6 @@ defmodule Binnacle.Fleet do
       |> Map.merge(%{status: Model.roll_up(Enum.map(hosts, & &1.status))})
     end)
   end
-
-  defp host_profile_status("buoy"), do: :down
-  defp host_profile_status("hud01"), do: :unknown
-  defp host_profile_status(_), do: :up
 
   # Per-metric series for the trend lines, oldest first.
   defp series(history) do

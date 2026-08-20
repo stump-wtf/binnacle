@@ -11,6 +11,7 @@ defmodule Binnacle.Fleet.Config do
   """
 
   alias Binnacle.Fleet.Model
+  alias Binnacle.Fleet.Proxmox.Token
   alias Model.{Container, Guest, HardwareDevice, Host, Site}
 
   @enforce_keys [:sites, :hosts, :guests, :containers, :hardware, :proxmox]
@@ -82,11 +83,22 @@ defmodule Binnacle.Fleet.Config do
         "baseline config must be a map with sites and hosts, got: #{inspect(other)}"
       )
 
-  # Optional per-host Proxmox API access (SPEC-0001 REQ proxmox). A host
-  # entry may declare "proxmox": {"url": ..., "token": ..., "poll_seconds": n}
-  # — both url and token are required when the block is present. Tokens are
-  # parsed here and live only in this struct; they are never rendered,
-  # logged, or reachable through the snapshot.
+  # Optional per-host Proxmox API access (SPEC-0001 REQ proxmox). A host entry
+  # may declare "proxmox": {"url": ..., "poll_seconds": n} plus its credential
+  # in either shape:
+  #
+  #   "token":        "homepage@pve!dashboard=<uuid>"   — the composed value
+  #   "token_id" +    "homepage@pve!dashboard"          — the two halves, which
+  #   "token_secret": "<uuid>"                            is how a secret store
+  #                                                       usually holds them
+  #
+  # Either way the credential is validated here, at load, and a half-token is
+  # a startup error naming the host. It used to be accepted and then rejected
+  # by PVE with a 401 on every poll of every node, which surfaces as the whole
+  # hypervisor fleet reading DOWN with no reason attached.
+  #
+  # Tokens live only in this struct; they are never rendered, logged, or
+  # reachable through the snapshot.
   defp proxmox_configs(hosts) do
     hosts
     |> Enum.flat_map(fn host ->
@@ -94,16 +106,37 @@ defmodule Binnacle.Fleet.Config do
         nil ->
           []
 
-        %{"url" => url, "token" => token} = block ->
+        %{"url" => url} = block ->
           poll_ms = Map.get(block, "poll_seconds", 30) * 1000
+          token = proxmox_token!(block, host_key(host))
           [{host_key(host), %{base_url: url, token: token, poll_ms: poll_ms}}]
 
         block ->
           raise ArgumentError,
-                "host #{host_key(host)} has an incomplete proxmox block #{inspect(Map.keys(block || %{}))} (url and token are required)"
+                "host #{host_key(host)} has an incomplete proxmox block #{inspect(Map.keys(block || %{}))} (url and a token are required)"
       end
     end)
     |> Map.new()
+  end
+
+  defp proxmox_token!(block, key) do
+    where = "host #{key}"
+
+    case {block["token"], block["token_id"], block["token_secret"]} do
+      {token, nil, nil} when is_binary(token) ->
+        Token.reveal(Token.parse!(token, where))
+
+      {nil, id, secret} when is_binary(id) and is_binary(secret) ->
+        Token.reveal(Token.compose!(id, secret, where))
+
+      {nil, nil, nil} ->
+        raise ArgumentError,
+              "#{where} has a proxmox block with no credential (needs \"token\", or \"token_id\" + \"token_secret\")"
+
+      _ ->
+        raise ArgumentError,
+              "#{where} has a proxmox block mixing credential shapes: give either \"token\" or both \"token_id\" and \"token_secret\", not a partial pair"
+    end
   end
 
   defp validate_unique_slugs!(slugs) do

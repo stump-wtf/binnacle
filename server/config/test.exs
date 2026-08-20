@@ -24,3 +24,9 @@ config :phoenix,
 
 # Deterministic API test auth (SPEC-0001 tests).
 config :binnacle, api_token: "test-token", api_rate_burst: 100_000
+
+# Synthetic fleet readings (Binnacle.Fleet.Sampler): a fixture for the
+# component gallery and the tests, so meters and trend lines have data to
+# draw without a live fleet. Deliberately absent in prod — see
+# Binnacle.Fleet's moduledoc.
+config :binnacle, synthetic_metrics: true

@@ -169,16 +169,16 @@ defmodule Binnacle.FleetTest do
       assert lir.sample.cpu >= 0 and lir.sample.cpu <= 100
       assert is_list(lir.series.cpu)
 
-      # ogma is the hot host: its rolled-up status must not be up.
-      ogma = Enum.find(hosts, &(&1.key == "ogma"))
-      refute ogma.status == :up
-
-      # buoy is the down host at the airbnb site.
+      # Status is derived from readings and children, never from a per-host
+      # fixture keyed on the name. The three profiles that used to live here
+      # ("ogma runs hot", "buoy is down", "hud01 is silent") named real
+      # machines and asserted states binnacle had not measured.
       dtw = Enum.find(sites, &(&1.slug == "dtw"))
-      buoy = Enum.find(dtw.hosts, &(&1.key == "buoy"))
-      assert buoy.status == :down
+      assert Enum.all?(hosts ++ dtw.hosts, &(&1.status in [:up, :degraded, :down, :unknown]))
+      assert Enum.all?(hosts ++ dtw.hosts, &(&1.telemetry in [:live, :unreachable, :none]))
 
       # Guests and containers hang off their host.
+      ogma = Enum.find(hosts, &(&1.key == "ogma"))
       ogma_guests = Enum.map(ogma.guests, & &1.name)
       assert "pve-services" in ogma_guests
       assert "hud01" in ogma_guests
@@ -190,8 +190,16 @@ defmodule Binnacle.FleetTest do
   describe "poller_specs/0" do
     test "builds pollers from env nodes in live-discovery mode" do
       nodes = [
-        %{"name" => "lir", "url" => "https://lir.stump.rocks:8006", "token" => "tok-lir"},
-        %{"name" => "dagda", "url" => "https://dagda.stump.rocks:8006", "token" => "tok-dagda"}
+        %{
+          "name" => "lir",
+          "url" => "https://lir.stump.rocks:8006",
+          "token" => "binnacle@pve!fleet=00000000-0000-4000-8000-000000000003"
+        },
+        %{
+          "name" => "dagda",
+          "url" => "https://dagda.stump.rocks:8006",
+          "token" => "binnacle@pve!fleet=00000000-0000-4000-8000-000000000004"
+        }
       ]
 
       Application.put_env(:binnacle, :proxmox_nodes, nodes)
@@ -208,7 +216,7 @@ defmodule Binnacle.FleetTest do
       assert {Binnacle.Fleet.Proxmox.Poller, :start_link, [args]} = lir.start
       assert args[:host_key] == "lir"
       assert args[:base_url] == "https://lir.stump.rocks:8006"
-      assert args[:token] == "tok-lir"
+      assert args[:token] == "binnacle@pve!fleet=00000000-0000-4000-8000-000000000003"
     end
 
     test "falls back to the baseline config when no env nodes are set" do
