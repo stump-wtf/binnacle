@@ -41,6 +41,25 @@ defmodule BinnacleWeb.FleetLiveSilenceTest do
     assert html =~ "no telemetry source"
   end
 
+  test "a site with no gateway configured says so, rather than showing nothing",
+       %{conn: conn} do
+    # The shipped fixture baseline declares no UniFi block, so every site is
+    # in this state. Blank space would read as "fine"; it is "not watched".
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "no gateway configured"
+  end
+
+  test "a site whose gateway stops answering reads as unreachable", %{conn: conn} do
+    site = Fleet.snapshot() |> List.first()
+    send(Fleet, {:unifi, site.slug, {:error, "connection refused"}})
+    _ = Fleet.snapshot()
+
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "gateway unreachable"
+  end
+
   test "a polled host that stops answering reads as unreachable", %{conn: conn} do
     for _ <- 1..3, do: send(Fleet, {:proxmox, "lir", {:error, "connection refused"}})
     _ = Fleet.snapshot()

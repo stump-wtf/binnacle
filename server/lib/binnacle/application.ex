@@ -14,10 +14,13 @@ defmodule Binnacle.Application do
         {Phoenix.PubSub, name: Binnacle.PubSub},
         # The fleet context: baseline config + metrics history + sample clock.
         Binnacle.Fleet
-        # Proxmox pollers, one per host with API credentials in the baseline
-        # config (SPEC-0001). No creds = no poller; the sampler feeds instead.
+        # Proxmox pollers (one per host with API credentials) and UniFi
+        # pollers (one per site with a gateway), both from the baseline
+        # config (SPEC-0001). No credentials = no poller, and the entity
+        # reports having no telemetry source rather than a fabricated state.
       ] ++
         Binnacle.Fleet.poller_specs() ++
+        Binnacle.Fleet.unifi_poller_specs() ++
         [
           # Start to serve requests, typically the last entry
           BinnacleWeb.Endpoint

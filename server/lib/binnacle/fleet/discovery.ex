@@ -1,164 +1,113 @@
 defmodule Binnacle.Fleet.Discovery do
-  # Live fleet discovery from Proxmox and UniFi APIs.
+  # Config drift: what the APIs report, against what the baseline declares.
   #
-  # Replaces the static baseline.json with API-driven topology:
-  # - Sites come from the UniFi Controller (/api/self/sites)
-  # - Hosts come from each Proxmox hypervisor's node list (/api2/json/nodes)
-  # - Guests come from each Proxmox hypervisor's qemu + lxc lists
+  # Governing: ADR-0002 (fleet taxonomy), SPEC-0001 REQ "Discovery Does Not
+  # Invent Topology" — "Discovery MUST NOT create Sites or Hosts. Entities
+  # observed outside configured topology MUST be surfaced as config drift."
   #
-  # The site→host mapping is NOT discoverable from either API — it comes from
-  # config (FLEET_SITE_MAP env var). Unmapped hosts are assigned to a default
-  # site.
+  # This module used to do the opposite. `discover/1` built a topology FROM
+  # the APIs and `Binnacle.Fleet.init/1` took it wholesale, so a successful
+  # discovery replaced every declared site and host. Two things were wrong
+  # with that, and the second is why it can never be repaired in place:
   #
-  # When no API credentials are configured, returns nil and the Fleet falls
-  # back to baseline.json.
+  #   1. Hosts came only from the Proxmox node lists, so every standalone
+  #      Docker host — most of the fleet — vanished the moment discovery
+  #      succeeded.
+  #
+  #   2. Sites came from UniFi. Each property runs its OWN controller, and
+  #      every one of them reports a single site named "default". Four
+  #      properties do not produce four sites; they produce four answers of
+  #      "default", which collapse into one. The API cannot tell you which
+  #      building it is standing in, because nothing in it knows.
+  #
+  # So topology is declared, and discovery's job is to report where the world
+  # disagrees with the declaration. A hypervisor that appears on the network
+  # and not in the baseline is not a host binnacle should invent — it is a
+  # question for a human, which is what drift is.
+  #
+  # @joestump-agent 08/20/2026 - Rewrote from topology-replacement to drift.
 
-  require Logger
+  alias Binnacle.Fleet.Model.Site
 
-  alias Binnacle.Fleet.Model.{Guest, Host, Site}
-  alias Binnacle.Fleet.Proxmox.Client, as: PveClient
-  alias Binnacle.Fleet.Unifi.Client, as: UnifiClient
-
-  @type proxmox_node :: %{name: String.t(), url: String.t(), token: String.t()}
-  @type unifi_config ::
-          %{url: String.t(), api_key: String.t()}
-          | %{url: String.t(), username: String.t(), password: String.t()}
-  @type site_kind_map :: %{String.t() => :home | :airbnb}
+  @type drift :: %{
+          kind: :unknown_proxmox_node | :unknown_unifi_site | :missing_proxmox_node,
+          detail: String.t(),
+          observed: String.t(),
+          site: String.t() | nil
+        }
 
   @doc """
-  Discover the fleet topology from live APIs.
+  Drift between a site's declared slug and the site names its controller
+  reports.
 
-  Returns `{:ok, %{sites: [Site], hosts: [Host], guests: [Guest]}}` when at
-  least one API source is configured and reachable, or `{:error, reason}` on
-  total failure. Returns `nil` when no API credentials are configured at all
-  (caller should fall back to baseline.json).
+  Every controller in this fleet answers "default", so a match is not
+  expected and is not what this checks for. What it catches is a controller
+  that has been given MORE than one site, or renamed away from the one it
+  had: either means the property's network was re-organized underneath a
+  declaration that still says otherwise.
+
+  `declared` is binnacle's slug for the property; `observed` are the site
+  names the controller returned.
   """
-  @spec discover(keyword()) ::
-          {:ok, %{sites: [Site.t()], hosts: [Host.t()], guests: [Guest.t()]}}
-          | {:error, String.t()}
-          | nil
-  def discover(opts \\ []) do
-    proxmox_nodes = Keyword.get(opts, :proxmox_nodes, [])
-    unifi = Keyword.get(opts, :unifi)
-    site_kinds = Keyword.get(opts, :site_kinds, %{})
-    site_map = Keyword.get(opts, :site_map, %{})
+  @spec unifi_site_drift(String.t(), [Site.t() | String.t()]) :: [drift()]
+  def unifi_site_drift(declared, observed) do
+    names = Enum.map(observed, &site_name/1)
 
-    has_proxmox = proxmox_nodes != []
-    has_unifi = unifi != nil
+    case names do
+      # One site is the normal shape: the controller's own "default", which
+      # is not a name for anything and is never adopted as a slug.
+      [_single] ->
+        []
 
-    cond do
-      not has_proxmox and not has_unifi ->
-        nil
+      [] ->
+        [
+          %{
+            kind: :unknown_unifi_site,
+            detail:
+              "site #{declared}'s controller reports no sites at all; it answered, but has no network configured",
+            observed: "",
+            site: declared
+          }
+        ]
 
-      true ->
-        sites_result =
-          if has_unifi,
-            do:
-              UnifiClient.fetch_sites(
-                unifi.url,
-                Map.take(unifi, [:api_key, :username, :password])
-              ),
-            else: {:ok, []}
-
-        hosts_guests = discover_proxmox(proxmox_nodes)
-
-        case sites_result do
-          {:ok, discovered_sites} ->
-            # Total-outage guard: zero sites and zero reachable hypervisors
-            # means nothing answered — fall back to baseline rather than
-            # wiping the topology.
-            if discovered_sites == [] and hosts_guests.ok == 0 do
-              {:error,
-               "no API source produced topology (#{length(proxmox_nodes)} Proxmox nodes configured, all failed or none set; UniFi returned no sites)"}
-            else
-              sites = apply_site_kinds(discovered_sites, site_kinds)
-              hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
-              {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
-            end
-
-          {:error, reason} ->
-            # Total-outage guard: credentials are configured but nothing
-            # answered. An empty {:ok, _} here would wipe the topology; the
-            # Fleet falls back to baseline.json instead.
-            if hosts_guests.ok == 0 do
-              {:error, "all configured API sources failed (UniFi: #{reason})"}
-            else
-              Logger.warning("UniFi site discovery failed: #{reason}")
-              sites = fallback_sites_from_hosts(hosts_guests.hosts, site_map, site_kinds)
-              hosts = assign_hosts_to_sites(hosts_guests.hosts, site_map, sites)
-              {:ok, %{sites: sites, hosts: hosts, guests: hosts_guests.guests}}
-            end
+      many ->
+        for name <- many do
+          %{
+            kind: :unknown_unifi_site,
+            detail:
+              "site #{declared}'s controller reports #{length(many)} sites (#{Enum.join(many, ", ")}); " <>
+                "binnacle maps one property to one controller, so the extra sites are not represented",
+            observed: name,
+            site: declared
+          }
         end
     end
   end
 
-  defp discover_proxmox(nodes) do
-    results =
-      Enum.map(nodes, fn node ->
-        case PveClient.fetch(node.url, node.token) do
-          {:ok, %{guests: guests, node_status: _status}} ->
-            host = %Host{
-              key: node.name,
-              site: "default",
-              dial_ip: nil,
-              guests: [],
-              hardware: [],
-              status: :unknown,
-              history: []
-            }
+  @doc """
+  Drift between the hosts declared for a site and the nodes Proxmox reports.
 
-            tagged_guests = Enum.map(guests, &%{&1 | host: node.name})
-            {:ok, host, tagged_guests}
+  A node the API names and the baseline does not is drift, never a new host:
+  binnacle shows the estate somebody declared, and a hypervisor nobody
+  declared is a question, not an entry.
+  """
+  @spec proxmox_node_drift(String.t(), [String.t()], [String.t()]) :: [drift()]
+  def proxmox_node_drift(host_key, declared_keys, observed_nodes) do
+    declared = MapSet.new(declared_keys)
 
-          {:error, reason} ->
-            Logger.warning("Proxmox discovery failed for #{node.name}: #{reason}")
-            {:error, node.name, reason}
-        end
-      end)
-
-    hosts = for {:ok, host, _guests} <- results, do: host
-    guests = for {:ok, _host, guest_list} <- results, guest <- guest_list, do: guest
-
-    %{hosts: hosts, guests: guests, ok: length(hosts)}
+    for node <- observed_nodes, not MapSet.member?(declared, node) do
+      %{
+        kind: :unknown_proxmox_node,
+        detail:
+          "#{host_key}'s Proxmox endpoint reports node #{inspect(node)}, which no baseline host declares",
+        observed: node,
+        site: nil
+      }
+    end
   end
 
-  defp apply_site_kinds(sites, kinds) when map_size(kinds) == 0, do: sites
-
-  defp apply_site_kinds(sites, kinds) do
-    Enum.map(sites, fn site ->
-      case Map.get(kinds, site.slug) do
-        nil -> site
-        kind -> %{site | kind: kind}
-      end
-    end)
-  end
-
-  defp assign_hosts_to_sites(hosts, site_map, sites) do
-    site_slugs = MapSet.new(sites, & &1.slug)
-
-    Enum.map(hosts, fn host ->
-      mapped_site = Map.get(site_map, host.key, "default")
-
-      site =
-        cond do
-          MapSet.member?(site_slugs, mapped_site) -> mapped_site
-          sites == [] -> "default"
-          true -> List.first(sites).slug || "default"
-        end
-
-      %{host | site: site}
-    end)
-  end
-
-  defp fallback_sites_from_hosts(hosts, site_map, site_kinds) do
-    slugs =
-      hosts
-      |> Enum.map(fn h -> Map.get(site_map, h.key, "default") end)
-      |> Enum.uniq()
-
-    Enum.map(slugs, fn slug ->
-      kind = Map.get(site_kinds, slug, :home)
-      %Site{slug: slug, kind: kind, hosts: []}
-    end)
-  end
+  defp site_name(%Site{slug: slug}), do: slug
+  defp site_name(name) when is_binary(name), do: name
+  defp site_name(%{"name" => name}), do: name
+  defp site_name(other), do: to_string(other)
 end

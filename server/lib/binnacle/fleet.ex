@@ -23,10 +23,10 @@ defmodule Binnacle.Fleet do
   use GenServer
 
   alias Binnacle.Fleet.Config
-  alias Binnacle.Fleet.Discovery
   alias Binnacle.Fleet.Model
   alias Binnacle.Fleet.Proxmox.Poller
   alias Binnacle.Fleet.Proxmox.Token
+  alias Binnacle.Fleet.Unifi.Poller, as: UnifiPoller
   alias Binnacle.Fleet.Sampler
 
   @sample_ms 5_000
@@ -99,6 +99,28 @@ defmodule Binnacle.Fleet do
     end
   end
 
+  @doc """
+  Child specs for the UniFi pollers, one per site that declares a gateway
+  (SPEC-0001 REQ "UniFi Site Discovery").
+
+  A site with no `unifi` block gets no poller and reports `network: nil` —
+  no gateway configured, which is different from a gateway that stopped
+  answering.
+  """
+  @spec unifi_poller_specs() :: [map()]
+  def unifi_poller_specs, do: unifi_poller_specs(baseline_path())
+
+  @spec unifi_poller_specs(Path.t()) :: [map()]
+  def unifi_poller_specs(baseline) do
+    for {slug, cfg} <- Config.load!(baseline).unifi do
+      Supervisor.child_spec(
+        {UnifiPoller,
+         site: slug, base_url: cfg.base_url, credential: cfg.credential, interval_ms: cfg.poll_ms},
+        id: {UnifiPoller, slug}
+      )
+    end
+  end
+
   # FLEET_PROXMOX_NODES bypasses Binnacle.Fleet.Config, so it needs the same
   # credential check the baseline file gets — otherwise the env path is the
   # one way a half-token still reaches PVE and 401s on every poll.
@@ -145,30 +167,27 @@ defmodule Binnacle.Fleet do
 
   @impl true
   def init(opts) do
-    {sites, hosts, guests, containers, hw, proxmox_keys} =
-      case discover_fleet(opts) do
-        {:discovered, discovered} ->
-          Logger.info(
-            "Fleet topology discovered from live APIs: #{length(discovered.hosts)} hosts, #{length(discovered.guests)} guests"
-          )
+    # Topology is declared, always. There is no discovery mode that replaces
+    # it: sites and hosts come from the baseline, and the pollers only ever
+    # ENRICH what is declared here — guests, samples, network inventory.
+    #
+    # The replaced-wholesale path that used to live here dropped every
+    # standalone host (hosts came only from Proxmox node lists) and took site
+    # names from UniFi, where all four properties answer "default". See
+    # Binnacle.Fleet.Discovery, which is now drift reporting rather than
+    # topology construction.
+    baseline = Keyword.get(opts, :baseline, baseline_path())
 
-          {discovered.sites, discovered.hosts, discovered.guests, [], %{},
-           MapSet.new(Enum.map(discovered.hosts, & &1.key))}
+    %Config{
+      sites: sites,
+      hosts: hosts,
+      guests: guests,
+      containers: containers,
+      hardware: hw,
+      proxmox: proxmox
+    } = Config.load!(baseline)
 
-        :fallback ->
-          baseline = Keyword.get(opts, :baseline, baseline_path())
-
-          %Config{
-            sites: sites,
-            hosts: hosts,
-            guests: guests,
-            containers: containers,
-            hardware: hw,
-            proxmox: proxmox
-          } = Config.load!(baseline)
-
-          {sites, hosts, guests, containers, hw, MapSet.new(Map.keys(proxmox))}
-      end
+    proxmox_keys = MapSet.new(Map.keys(proxmox))
 
     tick = 0
 
@@ -182,41 +201,13 @@ defmodule Binnacle.Fleet do
       history: %{},
       proxmox: proxmox_keys,
       misses: %{},
-      unreachable: MapSet.new()
+      unreachable: MapSet.new(),
+      networks: %{}
     }
 
     state = sample(state)
     :timer.send_interval(@sample_ms, :tick)
     {:ok, state}
-  end
-
-  defp discover_fleet(_opts) do
-    proxmox_nodes = Application.get_env(:binnacle, :proxmox_nodes, [])
-    unifi = Application.get_env(:binnacle, :unifi)
-    site_map = Application.get_env(:binnacle, :site_map, %{})
-    site_kinds = Application.get_env(:binnacle, :site_kinds, %{})
-
-    parsed_nodes =
-      Enum.map(proxmox_nodes, fn node ->
-        %{name: node["name"], url: node["url"], token: Token.reveal(env_node_token!(node))}
-      end)
-
-    case Discovery.discover(
-           proxmox_nodes: parsed_nodes,
-           unifi: unifi,
-           site_map: site_map,
-           site_kinds: site_kinds
-         ) do
-      {:ok, result} ->
-        {:discovered, result}
-
-      nil ->
-        :fallback
-
-      {:error, reason} ->
-        Logger.warning("Fleet discovery failed, falling back to baseline: #{reason}")
-        :fallback
-    end
   end
 
   @impl true
@@ -283,6 +274,42 @@ defmodule Binnacle.Fleet do
      }}
   end
 
+  # ---- unifi discovery -----------------------------------------------------
+
+  # A successful poll replaces the site's whole network picture: the gateway
+  # and the device inventory behind it, stamped with the time it was read so
+  # the UI can say how fresh it is.
+  def handle_info({:unifi, slug, {:ok, %{gateway: gateway, devices: devices}}}, state) do
+    network = %Model.Network{
+      reachable: true,
+      reason: nil,
+      at: DateTime.utc_now(),
+      gateway: gateway,
+      devices: devices
+    }
+
+    {:noreply, %{state | networks: Map.put(state.networks, slug, network)}}
+  end
+
+  # A failed poll marks the site's network unreachable WITH its reason, rather
+  # than dropping the entry. An absent network and an unreachable one look
+  # identical in a UI that only checks for presence, and they mean opposite
+  # things: one is a site nobody configured, the other is a site that lost its
+  # gateway.
+  def handle_info({:unifi, slug, {:error, reason}}, state) do
+    Logger.warning("unifi poll failed for site #{slug}: #{reason}")
+
+    network = %Model.Network{
+      reachable: false,
+      reason: reason,
+      at: DateTime.utc_now(),
+      gateway: nil,
+      devices: []
+    }
+
+    {:noreply, %{state | networks: Map.put(state.networks, slug, network)}}
+  end
+
   # ---- sampling ------------------------------------------------------------
 
   # The sample clock only advances history for hosts this node is *not*
@@ -339,15 +366,23 @@ defmodule Binnacle.Fleet do
           |> Enum.map(fn guest ->
             guest_ref = Model.Guest.ref(guest)
 
-            guest_containers =
-              Map.get(containers_by_guest, guest_ref, [])
-              |> Enum.map(fn c -> %{c | status: :up} end)
+            # Containers keep the status they were reported with. They used to
+            # be stamped `:up` unconditionally here, which meant every
+            # container in the config rendered green whether or not anything
+            # had looked at it — and nothing had, because the discovery
+            # channel for containers (SPEC-0001 REQ "Container Discovery") is
+            # not built yet. A declared container nobody has polled is
+            # `:unknown`, which is what the config gives it.
+            guest_containers = Map.get(containers_by_guest, guest_ref, [])
 
+            # The guest's own status comes from Proxmox — `running` is :up,
+            # `stopped` is :down. Rolling up only the containers threw that
+            # away, so a stopped VM was indistinguishable from a running one.
             %{
               guest
               | containers: guest_containers,
                 hardware: Map.get(state.hardware, guest_ref, []),
-                status: Model.roll_up(Enum.map(guest_containers, & &1.status))
+                status: Model.roll_up([guest.status | Enum.map(guest_containers, & &1.status)])
             }
           end)
 
@@ -409,10 +444,26 @@ defmodule Binnacle.Fleet do
           })
         end)
 
-      %{site | hosts: hosts}
-      |> Map.merge(%{status: Model.roll_up(Enum.map(hosts, & &1.status))})
+      %{site | hosts: hosts, network: Map.get(state.networks, site.slug)}
+      |> Map.merge(%{status: site_status(hosts, Map.get(state.networks, site.slug))})
     end)
   end
+
+  # A site is as bad as its worst host, plus its gateway. An unreachable
+  # gateway degrades the site even when every host is fine: the hosts are
+  # reachable from binnacle, which sits inside the network, and that says
+  # nothing about whether the property has connectivity.
+  #
+  # A site with no hosts and no gateway is :unknown — nothing has been
+  # measured, and green would be a claim binnacle cannot support.
+  defp site_status(hosts, network) do
+    Model.roll_up(Enum.map(hosts, & &1.status) ++ gateway_status(network))
+  end
+
+  defp gateway_status(nil), do: []
+  defp gateway_status(%Model.Network{reachable: false}), do: [:down]
+  defp gateway_status(%Model.Network{gateway: nil}), do: [:degraded]
+  defp gateway_status(%Model.Network{gateway: gateway}), do: [gateway.status]
 
   # Per-metric series for the trend lines, oldest first.
   defp series(history) do

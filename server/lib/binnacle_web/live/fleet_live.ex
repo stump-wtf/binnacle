@@ -91,12 +91,18 @@ defmodule BinnacleWeb.FleetLive do
           <div class="flex flex-wrap items-center gap-3">
             <Icon.icon name={:site} class="size-4 text-muted" />
             <h2 class="font-display text-lg font-bold text-bright">{site.slug}</h2>
+            <span :if={site.name && site.name != site.slug} class="text-sm text-muted">
+              {site.name}
+            </span>
             <%= if site.kind == :airbnb do %>
               <Badge.chip hue="info" label="airbnb" />
             <% else %>
               <span class="font-mono text-2xs uppercase tracking-wide text-dim">home</span>
             <% end %>
             <Badge.status status={site.status} />
+            <span class="font-mono text-2xs uppercase tracking-wide text-dim">
+              {network_label(site.network)}
+            </span>
           </div>
 
           <div class="flex flex-col gap-3">
@@ -324,4 +330,18 @@ defmodule BinnacleWeb.FleetLive do
   defp silence_label(:unreachable), do: "unreachable"
   defp silence_label(:none), do: "no telemetry source"
   defp silence_label(_), do: "no signal"
+
+  # What UniFi contributes to a site row, in the same voice the host rows use
+  # for silence: an unconfigured gateway, an unreachable one, and a healthy
+  # one are three different sentences, never one blank space.
+  defp network_label(nil), do: "no gateway configured"
+  defp network_label(%{reachable: false}), do: "gateway unreachable"
+  defp network_label(%{gateway: nil}), do: "no gateway found"
+
+  defp network_label(%{devices: devices}) do
+    case length(devices) do
+      1 -> "gateway · 1 device"
+      n -> "gateway · #{n} devices"
+    end
+  end
 end

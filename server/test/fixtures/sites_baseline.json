@@ -1,0 +1,22 @@
+{
+  "sites": [
+    {
+      "slug": "dub",
+      "kind": "home",
+      "name": "51 Wynberg Park",
+      "unifi": {
+        "url": "https://192.168.110.1",
+        "username": "ro",
+        "password": "pw",
+        "poll_seconds": 90
+      }
+    },
+    { "slug": "cornell", "kind": "airbnb" }
+  ],
+  "hosts": [
+    { "key": "ie01", "site": "dub", "dial_ip": "ie01.example" }
+  ],
+  "guests": [],
+  "containers": [],
+  "hardware": []
+}

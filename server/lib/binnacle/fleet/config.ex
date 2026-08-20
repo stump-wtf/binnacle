@@ -14,8 +14,8 @@ defmodule Binnacle.Fleet.Config do
   alias Binnacle.Fleet.Proxmox.Token
   alias Model.{Container, Guest, HardwareDevice, Host, Site}
 
-  @enforce_keys [:sites, :hosts, :guests, :containers, :hardware, :proxmox]
-  defstruct [:sites, :hosts, :guests, :containers, :hardware, :proxmox]
+  @enforce_keys [:sites, :hosts, :guests, :containers, :hardware, :proxmox, :unifi]
+  defstruct [:sites, :hosts, :guests, :containers, :hardware, :proxmox, :unifi]
 
   @type t :: %__MODULE__{
           sites: [Site.t()],
@@ -23,12 +23,19 @@ defmodule Binnacle.Fleet.Config do
           guests: [Guest.t()],
           containers: [Container.t()],
           hardware: %{optional(String.t() | integer()) => [HardwareDevice.t()]},
-          proxmox: %{optional(String.t()) => proxmox_config()}
+          proxmox: %{optional(String.t()) => proxmox_config()},
+          unifi: %{optional(String.t()) => unifi_config()}
         }
 
   @type proxmox_config :: %{
           base_url: String.t(),
           token: String.t(),
+          poll_ms: non_neg_integer()
+        }
+
+  @type unifi_config :: %{
+          base_url: String.t(),
+          credential: map(),
           poll_ms: non_neg_integer()
         }
 
@@ -48,6 +55,7 @@ defmodule Binnacle.Fleet.Config do
   @spec new!(map()) :: t()
   def new!(%{"sites" => sites, "hosts" => hosts} = config) do
     proxmox = proxmox_configs(hosts)
+    unifi = unifi_configs(sites)
     guests = Map.get(config, "guests", [])
     containers = Map.get(config, "containers", [])
     hardware = Map.get(config, "hardware", [])
@@ -72,7 +80,8 @@ defmodule Binnacle.Fleet.Config do
       guests: Enum.map(guests, &guest/1),
       containers: Enum.map(containers, &container/1),
       hardware: group_hardware(hardware, nodes),
-      proxmox: proxmox
+      proxmox: proxmox,
+      unifi: unifi
     }
   end
 
@@ -139,6 +148,57 @@ defmodule Binnacle.Fleet.Config do
     end
   end
 
+  # Optional per-site UniFi gateway (SPEC-0001 REQ "UniFi Site Discovery"). A
+  # site entry may declare:
+  #
+  #   "unifi": {"url": ..., "api_key": ...,   "poll_seconds": n}
+  #   "unifi": {"url": ..., "username": ..., "password": ..., "poll_seconds": n}
+  #
+  # Exactly one credential shape, and at most one gateway per site — the site
+  # is the unit a gateway belongs to, so a second one would be a second site.
+  #
+  # UniFi never contributes a site. Every controller in this fleet reports a
+  # single site named "default", so site identity cannot come from the API
+  # (REQ "Discovery Does Not Invent Topology"); it comes from the slug beside
+  # this block.
+  defp unifi_configs(sites) do
+    sites
+    |> Enum.flat_map(fn site ->
+      case site["unifi"] do
+        nil ->
+          []
+
+        %{"url" => url} = block ->
+          poll_ms = Map.get(block, "poll_seconds", 60) * 1000
+          credential = unifi_credential!(block, site["slug"])
+          [{site["slug"], %{base_url: url, credential: credential, poll_ms: poll_ms}}]
+
+        block ->
+          raise ArgumentError,
+                "site #{site["slug"]} has a unifi block with no url (keys: #{inspect(Map.keys(block || %{}))})"
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp unifi_credential!(block, slug) do
+    case {block["api_key"], block["username"], block["password"]} do
+      {key, nil, nil} when is_binary(key) ->
+        %{api_key: key}
+
+      {nil, user, pass} when is_binary(user) and is_binary(pass) ->
+        %{username: user, password: pass}
+
+      {nil, nil, nil} ->
+        raise ArgumentError,
+              "site #{slug} has a unifi block with no credential (needs \"api_key\", or \"username\" + \"password\")"
+
+      _ ->
+        raise ArgumentError,
+              "site #{slug} has a unifi block mixing credential shapes: give either \"api_key\" or both \"username\" and \"password\""
+    end
+  end
+
   defp validate_unique_slugs!(slugs) do
     case Enum.find(Enum.frequencies(slugs), fn {_slug, n} -> n > 1 end) do
       nil -> :ok
@@ -195,8 +255,16 @@ defmodule Binnacle.Fleet.Config do
 
   defp host_key(%{"key" => key}), do: key
 
-  defp site(%{"slug" => slug, "kind" => kind}) do
-    %Site{slug: slug, kind: site_kind(kind), hosts: []}
+  defp site(%{"slug" => slug, "kind" => kind} = entry) do
+    %Site{
+      slug: slug,
+      kind: site_kind(kind),
+      # The human label for the property ("51 Wynberg Park"). Optional: the
+      # slug is the identity, the name is only what a person calls it.
+      name: entry["name"] || slug,
+      hosts: [],
+      network: nil
+    }
   end
 
   defp site_kind(kind) when kind in @kinds, do: String.to_atom(kind)

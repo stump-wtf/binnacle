@@ -10,8 +10,46 @@ defmodule Binnacle.Fleet.Model do
   """
 
   defmodule Site do
-    @moduledoc "A home or Airbnb with a UniFi gateway. `kind` is exactly one of `:home` / `:airbnb`."
-    defstruct [:slug, :kind, :hosts]
+    @moduledoc """
+    A property: a home or an Airbnb, with a UniFi gateway and the hosts
+    standing in it. `kind` is exactly one of `:home` / `:airbnb`.
+
+    A site is **declared**, never discovered (SPEC-0001 REQ "Discovery Does Not
+    Invent Topology"). Each property runs its own UniFi controller and every
+    one of them reports a single site named "default", so the API can confirm
+    that a gateway answers but can never say which property it is standing in.
+    `slug` and `kind` come from config; `name` is the human label for the
+    property, also from config.
+
+    `network` is what UniFi contributes: the gateway's reachability and the
+    device inventory behind it. It is `nil` until the first poll, and
+    `%Network{reachable: false}` when the controller stops answering — never
+    silently absent.
+    """
+    defstruct [:slug, :kind, :name, :hosts, :network]
+  end
+
+  defmodule Network do
+    @moduledoc """
+    A site's network as UniFi reports it: whether the controller answered,
+    when, and the devices it lists.
+
+    `reachable: false` carries `reason` so a site that has lost its gateway
+    says why rather than rendering as an empty inventory, which is what an
+    unconfigured site also looks like.
+    """
+    defstruct [:reachable, :reason, :at, :gateway, devices: []]
+  end
+
+  defmodule NetworkDevice do
+    @moduledoc """
+    One UniFi-managed device: the gateway, a switch, an access point.
+
+    `kind` is normalized from UniFi's `type` field. `adopted` and `state`
+    are reported as UniFi gives them; a device the controller lists but has
+    not adopted is inventory, not an outage.
+    """
+    defstruct [:mac, :name, :model, :kind, :status, :adopted, :version, :uptime]
   end
 
   defmodule Host do
@@ -63,9 +101,14 @@ defmodule Binnacle.Fleet.Model do
   child — except `:unknown` children, which never promote the parent past
   `:up`. Absence of signal is not an outage; only a parent with no known
   children at all is itself `:unknown`.
+
+  A parent with **no children** is `:unknown`, not `:up`. A site with no hosts
+  (Cornell Ave is a gateway and nothing else) has had nothing measured, and
+  reporting it green is a claim binnacle cannot support — the same fabrication
+  as inventing a metric for a host with no telemetry source.
   """
   @spec roll_up([status()]) :: status()
-  def roll_up([]), do: :up
+  def roll_up([]), do: :unknown
 
   def roll_up(statuses) do
     case Enum.reject(statuses, &(&1 == :unknown)) do
