@@ -269,4 +269,44 @@ defmodule Binnacle.FleetTest do
       assert is_list(specs)
     end
   end
+
+  describe "which hosts count as having a telemetry source" do
+    # The snapshot tells three silences apart, and the set of polled hosts is
+    # what separates "we poll this and it went quiet" from "we have no way to
+    # measure this at all". That set has to name the hosts poller_specs/0
+    # actually starts pollers for, or the distinction reports the opposite of
+    # the truth.
+    test "a host polled from FLEET_PROXMOX_NODES reads as live, not as unmeasurable" do
+      Application.put_env(:binnacle, :proxmox_nodes, [
+        %{
+          "name" => "lir",
+          "url" => "https://lir.example:8006",
+          "token" => "binnacle@pve!fleet=00000000-0000-4000-8000-000000000003"
+        }
+      ])
+
+      on_exit(fn -> Application.delete_env(:binnacle, :proxmox_nodes) end)
+
+      fleet = start_supervised!({Fleet, name: :env_telemetry_fleet, baseline: @baseline})
+
+      lir =
+        fleet
+        |> GenServer.call(:snapshot)
+        |> Enum.flat_map(& &1.hosts)
+        |> Enum.find(&(&1.key == "lir"))
+
+      assert lir.telemetry == :live
+    end
+
+    test "a host with no poller anywhere reads as having no telemetry source" do
+      Application.delete_env(:binnacle, :proxmox_nodes)
+
+      fleet = start_supervised!({Fleet, name: :baseline_telemetry_fleet, baseline: @baseline})
+
+      assert fleet
+             |> GenServer.call(:snapshot)
+             |> Enum.flat_map(& &1.hosts)
+             |> Enum.all?(&(&1.telemetry == :none))
+    end
+  end
 end

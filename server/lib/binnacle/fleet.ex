@@ -59,11 +59,15 @@ defmodule Binnacle.Fleet do
   @doc """
   Child specs for the Proxmox pollers, one per host with API credentials.
 
-  In live-discovery mode (FLEET_PROXMOX_NODES configured) the pollers come from
-  the same env config the Fleet bootstraps its topology from — the baseline file
-  may carry no credentials at all in that mode, and without this the discovered
-  hosts would never receive an ongoing poll. Otherwise they come from the
-  baseline config as before. Hosts without a proxmox block keep the sampler feed.
+  Two credential sources, and FLEET_PROXMOX_NODES wins outright: it names the
+  hosts to poll and carries their tokens, so the baseline file may carry no
+  credentials at all. Otherwise they come from the baseline. Hosts without a
+  proxmox block keep the sampler feed either way.
+
+  Whichever source is used, `polled_host_keys/1` must agree with it — the
+  snapshot decides "live" versus "no telemetry source" from that set, and the
+  two disagreeing is how a host reads as unwatched while being polled every
+  30 seconds.
   """
   @spec poller_specs() :: [map()]
   def poller_specs do
@@ -118,6 +122,24 @@ defmodule Binnacle.Fleet do
          site: slug, base_url: cfg.base_url, credential: cfg.credential, interval_ms: cfg.poll_ms},
         id: {UnifiPoller, slug}
       )
+    end
+  end
+
+  # Which hosts actually have a Proxmox poller behind them. This has to be
+  # read from the same place poller_specs/0 reads it: FLEET_PROXMOX_NODES
+  # replaces the baseline's pollers rather than adding to them, so deriving
+  # this set from the baseline alone inverts the honest-telemetry
+  # distinction — every env-polled host reports "no telemetry source" while
+  # real samples arrive, and any baseline host with a proxmox block reports
+  # ":live" with no poller running at all.
+  #
+  # @joestump-agent 08/20/2026 - Split out during review of #54. Until this
+  # PR the two were kept in step by the discovery path, which seeded these
+  # keys from the same env node list; removing discovery removed that.
+  defp polled_host_keys(baseline_proxmox) do
+    case Application.get_env(:binnacle, :proxmox_nodes, []) do
+      [] -> MapSet.new(Map.keys(baseline_proxmox))
+      nodes -> MapSet.new(nodes, & &1["name"])
     end
   end
 
@@ -187,7 +209,7 @@ defmodule Binnacle.Fleet do
       proxmox: proxmox
     } = Config.load!(baseline)
 
-    proxmox_keys = MapSet.new(Map.keys(proxmox))
+    proxmox_keys = polled_host_keys(proxmox)
 
     tick = 0
 
