@@ -148,7 +148,19 @@ defmodule Binnacle.Fleet.Proxmox.Client do
 
   defp sample(_), do: nil
 
-  defp percent(value) when is_number(value), do: Float.round(value * 100, 1)
+  # `value * 100` is an INTEGER when Proxmox reports an integer, and
+  # Float.round/2 only accepts floats — so a node reporting `"cpu": 0` raised
+  # FunctionClauseError inside the poller's handle_info and crash-looped it.
+  #
+  # An idle node is exactly the one that does this: PVE serializes 0.0 as `0`,
+  # so the nodes that never crash are the busy ones. nyma, a fresh hypervisor
+  # with no guests, was the first to hit it — and only once authentication
+  # started working, because before that no reading ever got this far.
+  #
+  # Third bug of this shape in this function (see `ratio/2` below, and the
+  # null guest list above): Proxmox's JSON types are not stable across load,
+  # and every metric has to survive the idle case.
+  defp percent(value) when is_number(value), do: Float.round(value * 100.0, 1)
   defp percent(_), do: nil
 
   # `total || 1` did not guard this: 0 is truthy in Elixir, so a node

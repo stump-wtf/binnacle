@@ -79,17 +79,27 @@ defmodule Binnacle.Fleet.Model do
   defp rank(:unknown), do: 2
   defp rank(:up), do: 3
 
-  @doc "A sample's overall health, using the per-metric thresholds from Ui.Meter semantics."
+  @doc """
+  A sample's overall health, using the per-metric thresholds from Ui.Meter
+  semantics.
+
+  A saturated metric is `:degraded`, never `:down`. `:down` means the thing
+  is not answering; a host that reports 92% memory answered, and answered
+  with a number. ADR-0005: "status colour must stay honest ... a monitoring
+  gap is not an outage" — and neither is a full cache.
+
+  This mattered the moment real readings arrived: lir and ogma both run ZFS,
+  whose ARC deliberately occupies most of RAM, so both sat at ~90% memory and
+  the overview rendered two healthy hypervisors as DOWN. Threshold crossings
+  are what the meter hues are for; the status chip is for whether the thing
+  is there.
+  """
   @spec sample_status(Sample.t()) :: status()
   def sample_status(sample) do
     sample
     |> metrics()
-    |> Enum.map(fn {value, warn, danger} ->
-      cond do
-        value >= danger -> :down
-        value >= warn -> :degraded
-        true -> :up
-      end
+    |> Enum.map(fn {value, warn, _danger} ->
+      if value >= warn, do: :degraded, else: :up
     end)
     |> roll_up()
   end

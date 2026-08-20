@@ -118,6 +118,26 @@ defmodule Binnacle.Fleet.ProxmoxTest do
       assert reason =~ "permission"
     end
 
+    # PVE serializes 0.0 as `0`, so an IDLE node reports integer metrics and a
+    # busy one reports floats. `Float.round/2` rejects integers, so the poller
+    # crash-looped on exactly the nodes with nothing running on them — and only
+    # once authentication started working, because before that no reading got
+    # this far. nyma, a fresh hypervisor with no guests, was the first to hit it.
+    test "a node reporting integer metrics does not crash the poller" do
+      plug = probe_plug([], %{"cpu" => 0, "memory" => %{"total" => 100, "used" => 0}})
+
+      assert {:ok, %{sample: sample}} = Client.fetch("https://pve", "tok", plug: plug)
+      assert sample.cpu == 0.0
+      assert is_float(sample.cpu)
+    end
+
+    test "an integer CPU at full load is still a percentage" do
+      plug = probe_plug([], %{"cpu" => 1, "memory" => %{"total" => 100, "used" => 50}})
+
+      assert {:ok, %{sample: sample}} = Client.fetch("https://pve", "tok", plug: plug)
+      assert sample.cpu == 100.0
+    end
+
     # `total || 1` did not guard this: 0 is truthy in Elixir, so a node
     # reporting zero total memory divided by zero and raised.
     test "a node reporting zero total memory omits the metric rather than raising" do

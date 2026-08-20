@@ -143,6 +143,48 @@ defmodule Binnacle.FleetTest do
     end
   end
 
+  describe "sample_status/1 — a saturated metric is not an outage" do
+    # ADR-0005: "status colour must stay honest ... a monitoring gap is not an
+    # outage". Neither is a full cache. lir and ogma both run ZFS, whose ARC
+    # deliberately occupies most of RAM, so both sit near 90% memory — and the
+    # overview rendered two healthy hypervisors as DOWN the moment real
+    # readings started arriving.
+    test "a metric past its danger threshold is :degraded, never :down" do
+      saturated = %Model.Sample{
+        at: DateTime.utc_now(),
+        cpu: 99.0,
+        memory: 99.0,
+        disk: 99.0,
+        cpu_temp: 99.0,
+        hdd_temp: 99.0
+      }
+
+      assert Model.sample_status(saturated) == :degraded
+    end
+
+    test "lir's real reading — 90.4% memory on a ZFS host — is not an outage" do
+      lir = %Model.Sample{at: DateTime.utc_now(), cpu: 7.5, memory: 90.4}
+
+      assert Model.sample_status(lir) == :degraded
+    end
+
+    test "a nominal sample is :up" do
+      idle = %Model.Sample{at: DateTime.utc_now(), cpu: 0.2, memory: 13.3}
+
+      assert Model.sample_status(idle) == :up
+    end
+
+    test "only silence produces :down" do
+      # Nothing a host can *report* makes it :down. :down is reserved for a
+      # host that stopped answering, which the Fleet decides from consecutive
+      # poll misses, not from any reading.
+      for value <- [0.0, 50.0, 80.0, 95.0, 100.0] do
+        sample = %Model.Sample{at: DateTime.utc_now(), cpu: value, memory: value}
+        refute Model.sample_status(sample) == :down
+      end
+    end
+  end
+
   describe "the running fleet" do
     # The application supervision tree already runs Binnacle.Fleet against the
     # shipped baseline; exercise that instance, not a second one.
