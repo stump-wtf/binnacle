@@ -12,6 +12,10 @@ defmodule Binnacle.Application do
         BinnacleWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:binnacle, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Binnacle.PubSub},
+        # Owns the API rate limiter's ETS table. Supervised rather than
+        # created by a request process, because an ETS table dies with its
+        # owner and every bucket would go with it (SPEC-0001 REQ rate-limit).
+        BinnacleWeb.Plugs.RateLimit.Buckets,
         # The fleet context: baseline config + metrics history + sample clock.
         Binnacle.Fleet
         # Proxmox pollers (one per host with API credentials) and UniFi
