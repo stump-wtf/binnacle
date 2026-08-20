@@ -29,6 +29,8 @@ defmodule BinnacleWeb.Plugs.RateLimit.Buckets do
 
   use GenServer
 
+  require Logger
+
   @table :binnacle_rate_limit
   @sweep_ms :timer.minutes(1)
   @idle_ms :timer.minutes(10)
@@ -93,6 +95,11 @@ defmodule BinnacleWeb.Plugs.RateLimit.Buckets do
       write_concurrency: true
     ])
 
+    # Reject a malformed :trusted_proxies at boot, naming the offender, rather
+    # than raising once per request for the life of the deployment.
+    BinnacleWeb.Plugs.RateLimit.trusted_proxies!()
+    warn_if_proxies_unconfigured()
+
     Process.send_after(self(), :sweep, @sweep_ms)
     {:ok, %{}}
   end
@@ -102,5 +109,19 @@ defmodule BinnacleWeb.Plugs.RateLimit.Buckets do
     evict_idle()
     Process.send_after(self(), :sweep, @sweep_ms)
     {:noreply, state}
+  end
+
+  # An unset :trusted_proxies is the safe default — a believed x-forwarded-for
+  # from an untrusted peer is an unlimited supply of bucket keys — but behind a
+  # reverse proxy it also means every client shares one bucket. Say so once, at
+  # boot, so the limiter is not quietly global. `[]` set on purpose is silent.
+  defp warn_if_proxies_unconfigured do
+    if Application.fetch_env(:binnacle, :trusted_proxies) == :error do
+      Logger.warning(
+        "rate limiting: :trusted_proxies is unset, so x-forwarded-for is not believed and " <>
+          "every client behind the reverse proxy shares one bucket. Set " <>
+          "BINNACLE_TRUSTED_PROXIES to the proxy's address or CIDR."
+      )
+    end
   end
 end

@@ -123,6 +123,18 @@ if burst = System.get_env("BINNACLE_API_BURST") do
   config :binnacle, api_rate_burst: String.to_integer(burst)
 end
 
+# Reverse proxies whose `x-forwarded-for` the rate limiter believes: a
+# comma-separated list of addresses or CIDRs (e.g. "172.18.0.0/16,10.0.0.5").
+# binnacle sits behind Caddy, so without this the peer address is Caddy on
+# every request and the whole fleet shares one bucket. Set it to the proxy
+# only: any client inside the range can name its own bucket, and an
+# unlimited supply of bucket keys is no rate limit at all. Unset means the
+# header is never believed. A malformed entry fails the boot, naming it.
+if proxies = System.get_env("BINNACLE_TRUSTED_PROXIES") do
+  config :binnacle,
+    trusted_proxies: proxies |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+end
+
 # Proxmox Poller Credentials From The Environment
 #
 # Topology is declared in the baseline, never in the environment. The one
