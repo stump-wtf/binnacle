@@ -94,6 +94,63 @@ defmodule Binnacle.Fleet.Model do
     defstruct [:name, :kind, :model, :passthrough, :smart]
   end
 
+  defmodule Disk do
+    @moduledoc """
+    A physical disk on a hypervisor, with SMART health and key attributes
+    (ADR-0005, issue #69).
+
+    `health` is the SMART overall verdict: `:passed`, `:failed`, or `:unknown`.
+    `attributes` holds the raw SMART counters that matter for imminent failure
+    detection — `reallocated`, `pending`, `uncorrectable`, `crc_errors`,
+    `command_timeout`, `power_on_hours`. `temperature` is °C or nil.
+
+    The alert logic keys on **deltas**, not absolutes, for `reallocated` and
+    `crc_errors`: a drive with historical scars from a replaced cable should
+    not alert forever. The first poll establishes a baseline; subsequent polls
+    compare against it.
+    """
+    defstruct [
+      :device,
+      :model,
+      :serial,
+      :size,
+      :type,
+      :health,
+      :temperature,
+      :attributes,
+      :wearout
+    ]
+
+    @type health :: :passed | :failed | :unknown
+    @type t :: %__MODULE__{}
+  end
+
+  defmodule ZfsPool do
+    @moduledoc """
+    A ZFS pool on a hypervisor, with state and per-vdev error counters
+    (ADR-0005, issue #69).
+
+    `state` is `:online`, `:degraded`, `:faulted`, `:suspended`, or `:unknown`.
+    `errors` is the `errors:` line from `zpool status` — "No known data
+    errors" vs anything else. `scan` carries scrub/resilver progress if active.
+    `vdevs` is a flat list of vdev entries with `read`/`write`/`cksum` error
+    counts.
+    """
+    defstruct [
+      :name,
+      :state,
+      :size,
+      :allocated,
+      :free,
+      :fragmentation,
+      :errors,
+      :scan,
+      :vdevs
+    ]
+
+    @type t :: %__MODULE__{}
+  end
+
   defmodule Sample do
     @moduledoc """
     One point in time for one node. Percentages are 0–100 floats;
@@ -166,4 +223,63 @@ defmodule Binnacle.Fleet.Model do
       {s.hdd_temp || 0, 45, 55}
     ]
   end
+
+  @doc """
+  A disk's health status from its SMART verdict and key attributes.
+
+  - `:failed` SMART → `:down` — the drive has failed its self-test.
+  - `Current_Pending_Sector` or `Offline_Uncorrectable` > 0 → `:degraded` —
+    imminent media failure, but the drive is still answering.
+  - `UDMA_CRC_Error_Count` or `Command_Timeout` increasing (delta > 0 since
+    the last poll) → `:degraded` — cable/link degrading.
+  - Temperature > 50 °C → `:degraded` (Exos X18 rated to 60 °C).
+  - Otherwise → `:up`.
+
+  A pool not ONLINE or with non-zero vdev errors → `:degraded` or `:down`.
+  """
+  @spec disk_status(Disk.t()) :: status()
+  def disk_status(%Disk{health: :failed}), do: :down
+
+  def disk_status(%Disk{health: :unknown}), do: :unknown
+
+  def disk_status(%Disk{attributes: attrs, temperature: temp}) do
+    pending = attrs[:pending] || 0
+    uncorrectable = attrs[:uncorrectable] || 0
+    crc_delta = attrs[:crc_delta] || 0
+    cmd_delta = attrs[:cmd_delta] || 0
+
+    cond do
+      pending > 0 or uncorrectable > 0 -> :degraded
+      crc_delta > 0 or cmd_delta > 0 -> :degraded
+      is_number(temp) and temp > 50 -> :degraded
+      true -> :up
+    end
+  end
+
+  def disk_status(_), do: :unknown
+
+  @doc """
+  A ZFS pool's health status from its state and vdev errors.
+
+  - `:faulted` or `:suspended` → `:down` — the pool is not operational.
+  - `:degraded` → `:degraded` — running but with failed vdevs.
+  - Any non-zero vdev error counter → `:degraded`.
+  - `:online` with zero errors → `:up`.
+  """
+  @spec pool_status(ZfsPool.t()) :: status()
+  def pool_status(%ZfsPool{state: :faulted}), do: :down
+  def pool_status(%ZfsPool{state: :suspended}), do: :down
+  def pool_status(%ZfsPool{state: :degraded}), do: :degraded
+  def pool_status(%ZfsPool{state: :unknown}), do: :unknown
+
+  def pool_status(%ZfsPool{vdevs: vdevs}) do
+    total_errors =
+      Enum.reduce(vdevs || [], 0, fn vdev, acc ->
+        acc + (vdev[:read] || 0) + (vdev[:write] || 0) + (vdev[:cksum] || 0)
+      end)
+
+    if total_errors > 0, do: :degraded, else: :up
+  end
+
+  def pool_status(_), do: :unknown
 end

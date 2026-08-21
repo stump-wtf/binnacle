@@ -278,6 +278,10 @@ defmodule BinnacleWeb.FleetLive do
           </div>
         </div>
 
+        <%= if @host.disks != [] do %>
+          <.disk_health disks={@host.disks} pools={@host.pools} />
+        <% end %>
+
         <%= if @host.guests != [] do %>
           <div class="flex flex-col gap-3 border-t border-line-dim pt-4">
             <Badge.eyebrow text="guests" />
@@ -332,14 +336,77 @@ defmodule BinnacleWeb.FleetLive do
     """
   end
 
+  defp disk_health(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-3 border-t border-line-dim pt-4">
+      <Badge.eyebrow text="disk health" />
+      <div class="flex flex-col gap-2">
+        <div :for={disk <- @disks} class="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span class="font-mono text-xs text-bright">{disk.device}</span>
+          <span class="font-mono text-2xs text-dim">{disk.model}</span>
+          <Badge.chip hue={smart_hue(disk.health)} label={"SMART: #{disk.health}"} />
+          <%= if disk.temperature do %>
+            <Badge.chip
+              hue={if disk.temperature > 50, do: "warn", else: "info"}
+              label={"#{Float.round(disk.temperature * 1.0, 1)}°C"}
+            />
+          <% end %>
+          <%= if disk.attributes[:pending] && disk.attributes[:pending] > 0 do %>
+            <Badge.chip hue="warn" label={"pending: #{disk.attributes[:pending]}"} />
+          <% end %>
+          <%= if disk.attributes[:uncorrectable] && disk.attributes[:uncorrectable] > 0 do %>
+            <Badge.chip hue="danger" label={"uncorrectable: #{disk.attributes[:uncorrectable]}"} />
+          <% end %>
+          <%= if disk.attributes[:crc_errors] && disk.attributes[:crc_errors] > 0 do %>
+            <Badge.chip hue="warn" label={"crc: #{disk.attributes[:crc_errors]}"} />
+          <% end %>
+        </div>
+      </div>
+
+      <%= if @pools != [] do %>
+        <div class="flex flex-col gap-2 mt-2">
+          <div :for={pool <- @pools} class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-mono text-xs text-bright">{pool.name}</span>
+            <Badge.chip hue={pool_hue(pool.state)} label={"zpool: #{pool.state}"} />
+            <%= if pool.allocated && pool.size do %>
+              <span class="font-mono text-2xs text-dim">
+                {format_bytes(pool.allocated)} / {format_bytes(pool.size)}
+              </span>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp smart_hue(:passed), do: "ok"
+  defp smart_hue(:failed), do: "danger"
+  defp smart_hue("ok"), do: "ok"
+  defp smart_hue("warn"), do: "warn"
+  defp smart_hue(_), do: "danger"
+
+  defp pool_hue(:online), do: "ok"
+  defp pool_hue(:degraded), do: "warn"
+  defp pool_hue(:faulted), do: "danger"
+  defp pool_hue(:suspended), do: "danger"
+  defp pool_hue(_), do: "info"
+
+  defp format_bytes(bytes) when is_integer(bytes) do
+    cond do
+      bytes >= 1_099_511_627_776 -> "#{Float.round(bytes / 1_099_511_627_776, 1)} TB"
+      bytes >= 1_073_741_824 -> "#{Float.round(bytes / 1_073_741_824, 1)} GB"
+      bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
+      true -> "#{bytes} B"
+    end
+  end
+
+  defp format_bytes(_), do: "–"
+
   defp metric_status(nil, _thresholds), do: :unknown
 
   defp metric_status(value, thresholds),
     do: Meter.status_for(thresholds, value)
-
-  defp smart_hue("ok"), do: "ok"
-  defp smart_hue("warn"), do: "warn"
-  defp smart_hue(_), do: "danger"
 
   defp format(nil), do: "–"
 

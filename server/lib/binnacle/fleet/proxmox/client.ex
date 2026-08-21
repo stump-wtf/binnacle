@@ -11,7 +11,7 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   #
   # @joestump-agent 08/19/2026 - Initial version for SPEC-0001 REQ proxmox.
 
-  alias Binnacle.Fleet.Model.{Guest, Sample}
+  alias Binnacle.Fleet.Model.{Disk, Guest, Sample, ZfsPool}
 
   @timeout 5_000
 
@@ -62,7 +62,180 @@ defmodule Binnacle.Fleet.Proxmox.Client do
     end
   end
 
-  # A node name from /nodes: the single node this API endpoint serves. If the
+  @doc """
+  Poll disk health on one Proxmox host: the physical disk list with SMART
+  health, and per-disk SMART attributes for the ones that support it.
+
+  Returns `{:ok, [Disk.t()]}` or `{:error, reason}`. Disks that fail SMART
+  parsing are still returned with `health: :unknown` — a partial answer is
+  better than dropping the whole list.
+  """
+  @spec fetch_disks(String.t(), String.t(), keyword()) ::
+          {:ok, [Disk.t()]} | {:error, String.t()}
+  def fetch_disks(base_url, token, opts \\ []) do
+    base_url = String.trim_trailing(base_url, "/")
+
+    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+         {:ok, disk_list} <-
+           request(base_url, token, "/api2/json/nodes/#{node}/disks/list", opts)
+           |> body(opts) do
+      disks =
+        Enum.map(disk_list, fn entry ->
+          device = entry["devpath"] || "/dev/unknown"
+
+          smart =
+            if entry["health"] && entry["health"] != "UNKNOWN" do
+              fetch_smart(base_url, token, node, device, opts)
+            else
+              nil
+            end
+
+          {temp, attrs} =
+            case smart do
+              %{attributes: a} when is_list(a) -> {smart_temp(a), parse_smart_attrs(a)}
+              _ -> {nil, %{}}
+            end
+
+          %Disk{
+            device: device,
+            model: entry["model"],
+            serial: entry["serial"],
+            size: entry["size"],
+            type: disk_type(entry["type"]),
+            health: smart_health(entry["health"]),
+            temperature: temp,
+            attributes: attrs,
+            wearout: wearout(entry["wearout"])
+          }
+        end)
+
+      {:ok, disks}
+    end
+  end
+
+  @doc """
+  Poll ZFS pool health on one Proxmox host.
+
+  Returns `{:ok, [ZfsPool.t()]}` or `{:error, reason}`. An empty list means
+  the host has no ZFS pools — not an error.
+  """
+  @spec fetch_pools(String.t(), String.t(), keyword()) ::
+          {:ok, [ZfsPool.t()]} | {:error, String.t()}
+  def fetch_pools(base_url, token, opts \\ []) do
+    base_url = String.trim_trailing(base_url, "/")
+
+    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+         {:ok, pool_list} <-
+           request(base_url, token, "/api2/json/nodes/#{node}/disks/zfs", opts)
+           |> body(opts) do
+      pools =
+        Enum.map(pool_list, fn entry ->
+          %ZfsPool{
+            name: entry["name"],
+            state: pool_state(entry["health"]),
+            size: entry["size"],
+            allocated: entry["alloc"],
+            free: entry["free"],
+            fragmentation: entry["frag"],
+            errors: nil,
+            scan: nil,
+            vdevs: []
+          }
+        end)
+
+      {:ok, pools}
+    end
+  end
+
+  # Fetch SMART attributes for a single disk. Non-fatal: returns nil on any
+  # error so one uncooperative disk does not take down the whole list.
+  defp fetch_smart(base_url, token, node, device, opts) do
+    path = "/api2/json/nodes/#{node}/disks/smart?disk=#{URI.encode_www_form(device)}"
+
+    case request(base_url, token, path, opts) |> body(opts) do
+      {:ok, %{"health" => health, "attributes" => attrs}} ->
+        %{health: smart_health(health), attributes: attrs}
+
+      {:ok, %{"health" => health}} ->
+        %{health: smart_health(health), attributes: []}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp smart_health("PASSED"), do: :passed
+  defp smart_health("FAILED"), do: :failed
+  defp smart_health(_), do: :unknown
+
+  defp disk_type("hdd"), do: :hdd
+  defp disk_type("ssd"), do: :ssd
+  defp disk_type("nvme"), do: :nvme
+  defp disk_type("usb"), do: :usb
+  defp disk_type(_), do: :unknown
+
+  defp wearout(value) when is_integer(value), do: value
+  defp wearout(_), do: nil
+
+  defp pool_state("ONLINE"), do: :online
+  defp pool_state("DEGRADED"), do: :degraded
+  defp pool_state("FAULTED"), do: :faulted
+  defp pool_state("SUSPENDED"), do: :suspended
+  defp pool_state(_), do: :unknown
+
+  # Extract temperature from SMART attributes. The attribute name varies by
+  # drive family — Temperature_Celsius (ATA), Temperature, or encoded in
+  # raw values. We look for the common names and parse the raw value.
+  defp smart_temp(attrs) do
+    Enum.find_value(attrs, fn attr ->
+      case attr["name"] do
+        "Temperature_Celsius" -> parse_temp_raw(attr["raw"])
+        "Temperature" -> parse_temp_raw(attr["raw"])
+        _ -> nil
+      end
+    end)
+  end
+
+  defp parse_temp_raw(raw) when is_binary(raw) do
+    case Integer.parse(raw) do
+      {n, _} when n > 0 and n < 200 -> n * 1.0
+      _ -> nil
+    end
+  end
+
+  defp parse_temp_raw(_), do: nil
+
+  # Parse the SMART attributes that matter for failure detection (issue #69).
+  # The attribute IDs are standard across ATA drives:
+  #   5  = Reallocated_Sector_Ct
+  #   12 = Power_Cycle_Count (not used for alerts, but informative)
+  #   194 = Temperature_Celsius (handled above)
+  #   197 = Current_Pending_Sector
+  #   198 = Offline_Uncorrectable
+  #   199 = UDMA_CRC_Error_Count
+  #   9  = Power_On_Hours
+  # We key by name for clarity, not ID, since names are stable in smartctl.
+  defp parse_smart_attrs(attrs) do
+    by_name = Map.new(attrs, fn a -> {a["name"], a} end)
+
+    %{
+      reallocated: raw_int(by_name["Reallocated_Sector_Ct"]),
+      pending: raw_int(by_name["Current_Pending_Sector"]),
+      uncorrectable: raw_int(by_name["Offline_Uncorrectable"]),
+      crc_errors: raw_int(by_name["UDMA_CRC_Error_Count"]),
+      command_timeout: raw_int(by_name["Command_Timeout"]),
+      power_on_hours: raw_int(by_name["Power_On_Hours"])
+    }
+  end
+
+  defp raw_int(%{"raw" => raw}) when is_binary(raw) do
+    case Integer.parse(raw) do
+      {n, _} -> n
+      _ -> nil
+    end
+  end
+
+  defp raw_int(_), do: nil
   # endpoint reports several (a multi-node address), take the first online
   # node — v1 scopes one API token per host.
   defp nodes({:ok, %Req.Response{status: 200, body: body}}, _opts) do

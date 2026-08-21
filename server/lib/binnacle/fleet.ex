@@ -25,6 +25,7 @@ defmodule Binnacle.Fleet do
   alias Binnacle.Fleet.Config
   alias Binnacle.Fleet.Discovery
   alias Binnacle.Fleet.Model
+  alias Binnacle.Fleet.Proxmox.DiskPoller
   alias Binnacle.Fleet.Proxmox.Poller
   alias Binnacle.Fleet.Proxmox.Token
   alias Binnacle.Fleet.Unifi.Poller, as: UnifiPoller
@@ -135,6 +136,40 @@ defmodule Binnacle.Fleet do
     end
   end
 
+  @doc """
+  Child specs for the disk-health pollers, one per Proxmox host with API
+  credentials (issue #69). SMART and ZFS pool health are polled at a slower
+  cadence than the main status poll — per-disk SMART queries take longer.
+  """
+  @spec disk_poller_specs() :: [map()]
+  def disk_poller_specs do
+    case Application.get_env(:binnacle, :proxmox_nodes, []) do
+      [] ->
+        disk_poller_specs(baseline_path())
+
+      nodes ->
+        for node <- nodes do
+          Supervisor.child_spec(
+            {DiskPoller,
+             host_key: node["name"],
+             base_url: node["url"],
+             token: Token.reveal(env_node_token!(node))},
+            id: {DiskPoller, node["name"]}
+          )
+        end
+    end
+  end
+
+  @spec disk_poller_specs(Path.t()) :: [map()]
+  def disk_poller_specs(baseline) do
+    for {key, cfg} <- Config.load!(baseline).proxmox do
+      Supervisor.child_spec(
+        {DiskPoller, host_key: key, base_url: cfg.base_url, token: cfg.token},
+        id: {DiskPoller, key}
+      )
+    end
+  end
+
   # Which hosts actually have a Proxmox poller behind them. This has to be
   # read from the same place poller_specs/0 reads it: FLEET_PROXMOX_NODES
   # replaces the baseline's pollers rather than adding to them, so deriving
@@ -235,7 +270,9 @@ defmodule Binnacle.Fleet do
       misses: %{},
       unreachable: MapSet.new(),
       networks: %{},
-      drift: %{}
+      drift: %{},
+      disks: %{},
+      pools: %{}
     }
 
     state = sample(state)
@@ -378,6 +415,33 @@ defmodule Binnacle.Fleet do
     {:noreply, %{state | networks: Map.put(state.networks, slug, network)}}
   end
 
+  # ---- disk health (issue #69) ---------------------------------------------
+
+  # Disk health results arrive from the DiskPoller. Both disks and pools are
+  # replaced wholesale on success — the disk list is stable (device paths
+  # don't change without a reboot), and the pool list is stable too. Errors
+  # are non-fatal: last-known disk health is retained silently.
+  def handle_info({:disk_health, host_key, %{disks: disk_result, pools: pool_result}}, state) do
+    disks =
+      case disk_result do
+        {:ok, disks} -> disks
+        {:error, _reason} -> Map.get(state.disks, host_key, [])
+      end
+
+    pools =
+      case pool_result do
+        {:ok, pools} -> pools
+        {:error, _reason} -> Map.get(state.pools, host_key, [])
+      end
+
+    {:noreply,
+     %{
+       state
+       | disks: Map.put(state.disks, host_key, disks),
+         pools: Map.put(state.pools, host_key, pools)
+     }}
+  end
+
   # ---- sampling ------------------------------------------------------------
 
   # The sample clock only advances history for hosts this node is *not*
@@ -509,9 +573,14 @@ defmodule Binnacle.Fleet do
                 :down
 
               current ->
+                disks = Map.get(state.disks, host.key, [])
+                pools = Map.get(state.pools, host.key, [])
+
                 Model.roll_up([
                   Model.sample_status(current),
-                  Model.roll_up(Enum.map(guests, & &1.status))
+                  Model.roll_up(Enum.map(guests, & &1.status)),
+                  Model.roll_up(Enum.map(disks, &Model.disk_status/1)),
+                  Model.roll_up(Enum.map(pools, &Model.pool_status/1))
                 ])
 
               true ->
@@ -535,7 +604,9 @@ defmodule Binnacle.Fleet do
             sample: current,
             series: series(history),
             telemetry: telemetry,
-            stale: current == nil or telemetry == :unreachable
+            stale: current == nil or telemetry == :unreachable,
+            disks: Map.get(state.disks, host.key, []),
+            pools: Map.get(state.pools, host.key, [])
           })
         end)
 

@@ -24,6 +24,7 @@ defmodule Binnacle.Application do
         # reports having no telemetry source rather than a fabricated state.
       ] ++
         Binnacle.Fleet.poller_specs() ++
+        Binnacle.Fleet.disk_poller_specs() ++
         Binnacle.Fleet.unifi_poller_specs() ++
         [
           # Start to serve requests, typically the last entry
