@@ -380,11 +380,13 @@ defmodule BinnacleWeb.FleetLive do
     """
   end
 
+  # `:unknown` is dim, not red. A drive whose SMART verdict could not be read
+  # is a monitoring gap, and ADR-0005 is explicit that a monitoring gap is not
+  # an outage — painting it the same colour as FAILED trains the eye to ignore
+  # the colour that matters. Only FAILED is danger.
   defp smart_hue(:passed), do: "ok"
   defp smart_hue(:failed), do: "danger"
-  defp smart_hue("ok"), do: "ok"
-  defp smart_hue("warn"), do: "warn"
-  defp smart_hue(_), do: "danger"
+  defp smart_hue(_), do: "info"
 
   defp pool_hue(:online), do: "ok"
   defp pool_hue(:degraded), do: "warn"

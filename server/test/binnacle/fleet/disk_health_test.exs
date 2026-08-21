@@ -194,7 +194,6 @@ defmodule Binnacle.Fleet.DiskHealthTest do
 
           path ->
             disk = conn.query_string |> URI.decode_query() |> Map.get("disk", "")
-            IO.puts("SMART disk: #{disk}")
 
             cond do
               String.contains?(disk, "sda") ->

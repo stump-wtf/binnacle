@@ -75,7 +75,8 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   def fetch_disks(base_url, token, opts \\ []) do
     base_url = String.trim_trailing(base_url, "/")
 
-    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+    with {:ok, node, _all_nodes} <-
+           request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
          {:ok, disk_list} <-
            request(base_url, token, "/api2/json/nodes/#{node}/disks/list", opts)
            |> body(opts) do
@@ -124,7 +125,8 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   def fetch_pools(base_url, token, opts \\ []) do
     base_url = String.trim_trailing(base_url, "/")
 
-    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+    with {:ok, node, _all_nodes} <-
+           request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
          {:ok, pool_list} <-
            request(base_url, token, "/api2/json/nodes/#{node}/disks/zfs", opts)
            |> body(opts) do
@@ -152,15 +154,14 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   defp fetch_smart(base_url, token, node, device, opts) do
     path = "/api2/json/nodes/#{node}/disks/smart?disk=#{URI.encode_www_form(device)}"
 
+    # Only the attributes are taken from here. The overall verdict comes from
+    # the disk-list entry, which is also what gates whether this call happens
+    # at all — reading it a second time from this response would be a second
+    # source of truth for the same field.
     case request(base_url, token, path, opts) |> body(opts) do
-      {:ok, %{"health" => health, "attributes" => attrs}} ->
-        %{health: smart_health(health), attributes: attrs}
-
-      {:ok, %{"health" => health}} ->
-        %{health: smart_health(health), attributes: []}
-
-      _ ->
-        nil
+      {:ok, %{"attributes" => attrs}} when is_list(attrs) -> %{attributes: attrs}
+      {:ok, %{}} -> %{attributes: []}
+      _ -> nil
     end
   end
 

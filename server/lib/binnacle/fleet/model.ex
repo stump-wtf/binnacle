@@ -104,10 +104,17 @@ defmodule Binnacle.Fleet.Model do
     detection — `reallocated`, `pending`, `uncorrectable`, `crc_errors`,
     `command_timeout`, `power_on_hours`. `temperature` is °C or nil.
 
-    The alert logic keys on **deltas**, not absolutes, for `reallocated` and
-    `crc_errors`: a drive with historical scars from a replaced cable should
-    not alert forever. The first poll establishes a baseline; subsequent polls
-    compare against it.
+    Two of those counters alert on **movement**, not on their absolute value:
+    `crc_errors` and `command_timeout` are lifetime totals, so a drive carrying
+    scars from a cable replaced years ago would alert forever. `DiskPoller`
+    stamps each reading with `:crc_delta` and `:cmd_delta` — how far each moved
+    since that drive's previous poll — and `disk_status/1` keys on those. The
+    first sighting of a drive is a baseline, not an indictment.
+
+    `pending` and `uncorrectable` alert on the absolute value instead, because
+    any non-zero reading there is a sector the drive could not read *now*.
+    `reallocated` and `power_on_hours` are carried for display only; neither
+    feeds the status roll-up.
     """
     defstruct [
       :device,
@@ -230,8 +237,9 @@ defmodule Binnacle.Fleet.Model do
   - `:failed` SMART → `:down` — the drive has failed its self-test.
   - `Current_Pending_Sector` or `Offline_Uncorrectable` > 0 → `:degraded` —
     imminent media failure, but the drive is still answering.
-  - `UDMA_CRC_Error_Count` or `Command_Timeout` increasing (delta > 0 since
-    the last poll) → `:degraded` — cable/link degrading.
+  - `UDMA_CRC_Error_Count` or `Command_Timeout` increasing since the drive's
+    previous poll (`:crc_delta` / `:cmd_delta` > 0, stamped by `DiskPoller`) →
+    `:degraded` — cable/link degrading.
   - Temperature > 50 °C → `:degraded` (Exos X18 rated to 60 °C).
   - Otherwise → `:up`.
 
