@@ -195,3 +195,105 @@ jobs:
           build-args: BUILD_SHA=${{ gitea.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+  # ---- deploy ---------------------------------------------------------------
+  #
+  # On-merge deploy to ie02, mirroring the pattern stump.wtf/cairn already uses
+  # for cloud01. Until this existed binnacle had no deploy step at all: the
+  # `main-only` job in pipeline.yaml is a placeholder that echoes a line, and
+  # its comment says the deploy "arrives with the bootstrap story". So merging
+  # to main built and pushed a new :latest that nothing ever pulled, and the
+  # running container drifted however many merges behind until somebody ran the
+  # playbook by hand. On 2026-08-21 that gap held a completely unstyled site
+  # live for the better part of an hour after the fix for it had already
+  # merged, green.
+  #
+  # This is the one place binnacle departs from ADR-0002's ansible-pull model,
+  # and it is opt-in exactly as cairn's is: inert until the repo variable
+  # DEPLOY_ON_MERGE is set to true, so it can land before the credentials it
+  # needs exist and simply skip until they do.
+  #
+  # @joestump 08/21/2026 - Added after the unstyled-site incident.
+  deploy:
+    name: deploy to ie02 (ansible)
+    needs: [image]
+    if: ${{ vars.DEPLOY_ON_MERGE == 'true' && gitea.event_name == 'push' && gitea.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Serialize against other deploys of this service. A second merge landing
+    # mid-converge would have two ansible runs writing the same compose file
+    # and secret files on ie02 at once.
+    concurrency:
+      group: binnacle-deploy-ie02
+      cancel-in-progress: false
+    env:
+      ANSIBLE_FORCE_COLOR: 'true'
+      # binnacle's baseline embeds per-node PVE API tokens and its API token
+      # lives at secret/data/ie02/binnacle, so the play needs vault. AppRole,
+      # not a static VAULT_TOKEN: a static token cannot re-authenticate, dies
+      # at max-TTL, and takes every later deploy with it silently — the
+      # 2026-07-01 vault-agent OMG, repeated in CI. The runner logs in per run
+      # for a short-lived token scoped to secret/data/ie02/* (policy
+      # deploy-ie02).
+      VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+      VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+      # The service role's dns_cname tasks talk to Route53.
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: us-east-1
+      # `docker compose pull` of an Elixir release image over the LAN is well
+      # inside this, but the default is not.
+      DOCKER_TIMEOUT: 600
+    steps:
+      - name: Checkout stumpcloud/ansible (playbooks + inventory)
+        uses: actions/checkout@v4
+        with:
+          repository: stumpcloud/ansible
+          ref: main
+          token: ${{ secrets.GIT_AUTH_TOKEN }}
+
+      - name: Log in to Gitea (pull the ansible-runner action image)
+        uses: docker/login-action@v3
+        with:
+          registry: gitea.stump.rocks
+          username: joestump-agent
+          password: ${{ secrets.GIT_AUTH_TOKEN }}
+
+      # v2.1.0 exactly, not @v2: ssh_private_key became a real delivered input
+      # in v2.1.0, and earlier versions silently discarded it — which is how
+      # cairn's deploy job spent its whole life red on "Permission denied
+      # (publickey)". Do not tidy this back to the major alias without checking
+      # what it points at.
+      #
+      # No ssh-agent step: the agent's socket would live in this job's
+      # container while ansible-playbook runs inside the action's container,
+      # and the two never meet. ssh_private_key is what actually reaches
+      # ansible.
+      - name: Deploy binnacle to ie02
+        uses: https://gitea.stump.rocks/stumpcloud/ansible-runner@v2.1.0
+        with:
+          playbook: playbooks/services/binnacle.yaml
+          inventory: dub.yaml
+          ssh_hosts: ie02.stump.rocks
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # The deploy is only worth anything if the thing now running is the thing
+      # that was just built. Checking the footer SHA alone is not enough — the
+      # unstyled-site incident had a correct SHA on a page with no stylesheet —
+      # so assert the stylesheet the release serves actually carries utilities.
+      - name: Verify the running build
+        run: |
+          set -eu
+          for i in $(seq 1 30); do
+            live=$(curl -fsS https://binnacle.stump.rocks/ 2>/dev/null \
+                   | grep -o 'commit/[0-9a-f]\{40\}' | head -1 | cut -d/ -f2) || true
+            if [ "${live:-}" = "${GITHUB_SHA}" ]; then
+              css=$(curl -fsS https://binnacle.stump.rocks/assets/app.css)
+              case "$css" in
+                *".flex{"*) echo "deployed ${GITHUB_SHA} and serving a styled page"; exit 0 ;;
+                *) echo "::error::${GITHUB_SHA} is live but /assets/app.css has no utilities"; exit 1 ;;
+              esac
+            fi
+            sleep 10
+          done
+          echo "::error::binnacle did not come up on ${GITHUB_SHA} within 5 minutes (still on ${live:-unknown})"
+          exit 1
