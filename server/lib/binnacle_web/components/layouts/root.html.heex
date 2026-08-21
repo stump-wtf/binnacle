@@ -17,8 +17,11 @@
       design system: an explicit choice wins, otherwise follow the OS.
       Storing only an explicit choice is what lets a user who has not chosen
       keep tracking their OS when it changes.
+
+      The nonce comes from BinnacleWeb.Plugs.SecurityHeaders so CSP
+      script-src allows only this one inline script.
     -->
-    <script>
+    <script nonce={assigns[:csp_nonce]}>
       (function () {
         try {
           var saved = localStorage.getItem("binnacle-theme");
@@ -34,19 +37,14 @@
     </script>
 
     <!--
-      Fonts. preconnect first so the TLS handshake to the font CDN overlaps
-      CSS parsing. These are the three families the design system's
-      tokens/fonts.css would otherwise pull in via a nested remote @import —
-      see assets/styles/tokens/README.md for why they are loaded here instead.
+      Fonts are self-hosted under /fonts and loaded via @font-face
+      declarations in assets/styles/fonts.css (imported by app.css).
+      No remote origins — the CSP stays locked to style-src 'self'
+      and font-src 'self'. The three families are the design system's
+      whole type stack:
 
       JetBrains Mono = body/UI/code · Space Mono = display · Silkscreen = pixel accent.
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Silkscreen:wght@400;700&display=swap"
-    />
 
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
@@ -55,7 +53,7 @@
   <body>
     {@inner_content}
     <noscript>
-      <p style="font-family: monospace; padding: 2rem; color: #c9c9e8">
+      <p class="noscript-message">
         binnacle needs JavaScript — the interface is a Phoenix LiveView.
       </p>
     </noscript>

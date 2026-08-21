@@ -307,3 +307,10 @@
     animation: none;
   }
 }
+
+/* noscript fallback — inline style removed to satisfy CSP style-src 'self' */
+.noscript-message {
+  font-family: monospace;
+  padding: 2rem;
+  color: #c9c9e8;
+}

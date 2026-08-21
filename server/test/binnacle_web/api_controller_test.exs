@@ -17,6 +17,8 @@ defmodule BinnacleWeb.ApiControllerTest do
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
       assert [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "script-src 'self'" and csp =~ "frame-ancestors 'none'"
+      assert csp =~ "font-src 'self'"
+      assert csp =~ ~s('nonce-)
     end
   end
 
