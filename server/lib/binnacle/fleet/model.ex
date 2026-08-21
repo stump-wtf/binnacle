@@ -25,8 +25,16 @@ defmodule Binnacle.Fleet.Model do
     device inventory behind it. It is `nil` until the first poll, and
     `%Network{reachable: false}` when the controller stops answering — never
     silently absent.
+
+    `status` and `drift` are what `Fleet.build_snapshot/1` computes for the
+    property: its worst-host-plus-gateway rollup, and the config drift
+    attributed to it. Both are declared fields with defaults rather than keys
+    the snapshot grafts on with `Map.merge/2`. `SiteJSON` and `FleetLive` read
+    `site.status` and `site.drift` directly, and on a `%Site{}` built anywhere
+    other than `build_snapshot/1` an undeclared key is a `KeyError` at render
+    time — not the `nil` those callers are written to handle.
     """
-    defstruct [:slug, :kind, :name, :hosts, :network]
+    defstruct [:slug, :kind, :name, :hosts, :network, status: :unknown, drift: []]
   end
 
   defmodule Network do
