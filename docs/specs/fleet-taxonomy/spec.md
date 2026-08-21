@@ -189,6 +189,8 @@ All concurrent operations MUST follow safe concurrency patterns:
 ### Requirement: Persistence — Crash Survival via DETS
 
 > **Amended 2026-08-21 by ADR-0007.** The original "Database Operation Standards" requirement assumed a relational database (Ecto/SQLite/Postgres). ADR-0007 decided against that: binnacle persists the last N samples per host to a DETS table for crash survival, not a database. The clauses about parameterized statements and schema init are withdrawn — they describe a database the decision is not to use. The atomic-write clause survives, restated below for the DETS shape.
+>
+> **Status: not yet implemented.** ADR-0007 is the decision; nothing in `Binnacle.Fleet` opens a DETS table yet, so the clauses below describe the target shape rather than current behaviour. Tracked by https://gitea.stump.rocks/stump.wtf/binnacle/issues/68 — this marker comes off when that lands.
 
 - The per-host history MUST be written to a DETS table on every sample tick so a restart restores the trend window
 - The write per host per tick MUST be atomic — a failure mid-write leaves the prior history intact

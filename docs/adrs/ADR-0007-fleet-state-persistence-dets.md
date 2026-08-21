@@ -51,6 +51,7 @@ SPEC-0001's "Database Operation Standards" requirement is **amended**: the atomi
 
 ## Notes
 
+* Implementation is tracked separately by https://gitea.stump.rocks/stump.wtf/binnacle/issues/68. This ADR records the decision only — issue #56 asked for the decision, and closing it must not lose the build.
 * The DETS table path should be configurable (`BINNACLE_DATA_DIR`, defaulting to `priv/data`) so the container can mount a volume for it.
 * The table should be opened with `file: :read_write` and `auto_save: true` so the Fleet process does not need to manage checkpointing.
 * A future story may add a Prometheus/Beszel *reader* to binnacle for long-term trend queries. That reader is a separate concern from the DETS crash-survival table and should not be coupled to it.
