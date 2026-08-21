@@ -105,6 +105,8 @@ defmodule BinnacleWeb.FleetLive do
             </span>
           </div>
 
+          <.drift_section :if={site.drift && site.drift != []} drift={site.drift} />
+
           <div class="flex flex-col gap-3">
             <.host_row
               :for={host <- site.hosts}
@@ -306,6 +308,24 @@ defmodule BinnacleWeb.FleetLive do
         <% end %>
       </div>
     </Panel.view>
+    """
+  end
+
+  defp drift_section(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-2 rounded-md border border-neon-gold/30 bg-neon-gold/5 px-4 py-3">
+      <div class="flex items-center gap-2">
+        <Icon.icon name={:alert} class="size-4 text-neon-gold" />
+        <span class="font-mono text-2xs uppercase tracking-wide text-neon-gold">
+          config drift
+        </span>
+      </div>
+      <div class="flex flex-col gap-1">
+        <p :for={entry <- @drift} class="font-mono text-xs text-muted">
+          {entry.detail}
+        </p>
+      </div>
+    </div>
     """
   end
 

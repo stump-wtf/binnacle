@@ -9,6 +9,8 @@ defmodule Binnacle.Fleet.Unifi.Poller do
   # a switch, not on the timescale of CPU load.
   #
   # @joestump-agent 08/20/2026 - Initial version for REQ "UniFi Site Discovery".
+  # @joestump-agent 08/21/2026 - Added fetch_sites to also return observed
+  #   site names for config drift detection (issue #55).
 
   use GenServer
 
@@ -41,6 +43,7 @@ defmodule Binnacle.Fleet.Unifi.Poller do
       credential: Credential.new(Keyword.fetch!(opts, :credential)),
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval),
       fetch: Keyword.get(opts, :fetch, &Client.fetch_devices/3),
+      fetch_sites: Keyword.get(opts, :fetch_sites, &Client.fetch_sites/3),
       fetch_opts: Keyword.get(opts, :fetch_opts, []),
       sink: Keyword.get(opts, :sink, Binnacle.Fleet)
     }
@@ -51,14 +54,35 @@ defmodule Binnacle.Fleet.Unifi.Poller do
 
   @impl true
   def handle_info(:poll, state) do
+    cred = Credential.reveal(state.credential)
+
     result =
-      state.fetch.(state.base_url, Credential.reveal(state.credential), state.fetch_opts)
+      case state.fetch.(state.base_url, cred, state.fetch_opts) do
+        {:ok, data} ->
+          # Also fetch site names for drift detection. A failure here does not
+          # degrade the device poll — drift is secondary to the device inventory.
+          site_names =
+            case state.fetch_sites.(state.base_url, cred, state.fetch_opts) do
+              {:ok, sites} -> Enum.map(sites, &site_name/1)
+              {:error, _} -> nil
+            end
+
+          {:ok, Map.put(data, :site_names, site_names)}
+
+        {:error, _} = error ->
+          error
+      end
 
     # Errors are delivered too: a site whose controller stops answering must
     # say so, rather than keeping a stale inventory that looks current.
     send(state.sink, {:unifi, state.site, result})
     {:noreply, state, {:continue, :reschedule}}
   end
+
+  defp site_name(%Binnacle.Fleet.Model.Site{slug: slug}), do: slug
+  defp site_name(%{"name" => name}), do: name
+  defp site_name(name) when is_binary(name), do: name
+  defp site_name(other), do: to_string(other)
 
   @impl true
   def handle_continue(:reschedule, state) do

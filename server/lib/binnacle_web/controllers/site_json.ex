@@ -18,7 +18,8 @@ defmodule BinnacleWeb.SiteJSON do
             kind: site.kind,
             status: site.status,
             host_count: length(site.hosts),
-            network: network(site.network)
+            network: network(site.network),
+            drift: drift(site.drift)
           }
         end)
     }
@@ -31,6 +32,7 @@ defmodule BinnacleWeb.SiteJSON do
       kind: site.kind,
       status: site.status,
       network: network(site.network),
+      drift: drift(site.drift),
       hosts: Enum.map(site.hosts, &HostJSON.host/1)
     }
   end
@@ -63,5 +65,18 @@ defmodule BinnacleWeb.SiteJSON do
       version: d.version,
       uptime: d.uptime
     }
+  end
+
+  defp drift(nil), do: []
+
+  defp drift(entries) do
+    Enum.map(entries, fn d ->
+      %{
+        kind: d.kind,
+        detail: d.detail,
+        observed: d.observed,
+        site: d.site
+      }
+    end)
   end
 end

@@ -23,6 +23,7 @@ defmodule Binnacle.Fleet do
   use GenServer
 
   alias Binnacle.Fleet.Config
+  alias Binnacle.Fleet.Discovery
   alias Binnacle.Fleet.Model
   alias Binnacle.Fleet.Proxmox.Poller
   alias Binnacle.Fleet.Proxmox.Token
@@ -54,6 +55,15 @@ defmodule Binnacle.Fleet do
   @spec subscribe() :: :ok
   def subscribe do
     Phoenix.PubSub.subscribe(Binnacle.PubSub, "fleet")
+  end
+
+  @doc """
+  Fleet-wide config drift: entities the APIs report that no baseline
+  declares. Each entry carries `:kind`, `:detail`, `:observed`, and `:site`.
+  """
+  @spec drift() :: [map()]
+  def drift do
+    GenServer.call(__MODULE__, :drift)
   end
 
   @doc """
@@ -224,7 +234,8 @@ defmodule Binnacle.Fleet do
       proxmox: proxmox_keys,
       misses: %{},
       unreachable: MapSet.new(),
-      networks: %{}
+      networks: %{},
+      drift: []
     }
 
     state = sample(state)
@@ -238,6 +249,11 @@ defmodule Binnacle.Fleet do
   end
 
   @impl true
+  def handle_call(:drift, _from, state) do
+    {:reply, state.drift, state}
+  end
+
+  @impl true
   def handle_info(:tick, state) do
     state = sample(%{state | tick: state.tick + 1})
     Phoenix.PubSub.broadcast(Binnacle.PubSub, "fleet", :fleet_tick)
@@ -248,13 +264,30 @@ defmodule Binnacle.Fleet do
 
   # A successful poll replaces everything the host owns: its guest list
   # (identity is vmid, so a migration re-parents instead of duplicating) and
-  # its metric sample. Consecutive-miss state resets.
-  def handle_info({:proxmox, host_key, {:ok, %{guests: discovered, sample: sample}}}, state) do
+  # its metric sample. Consecutive-miss state resets. Drift is computed from
+  # the node names the API reports against the declared host keys.
+  def handle_info(
+        {:proxmox, host_key, {:ok, %{guests: discovered, sample: sample} = result}},
+        state
+      ) do
     guests =
       Enum.reject(state.guests, &(&1.host == host_key)) ++
         Enum.map(discovered, &%{&1 | host: host_key})
 
     history = push_history(Map.get(state.history, host_key, []), sample)
+
+    # Compute drift: a node the API names that no baseline host declares.
+    observed_nodes = Map.get(result, :nodes, [])
+    declared_keys = Enum.map(state.hosts, & &1.key)
+    new_drift = Discovery.proxmox_node_drift(host_key, declared_keys, observed_nodes)
+
+    # Tag Proxmox drift with the host's site so the snapshot can group it.
+    host_site = Enum.find_value(state.hosts, fn h -> if h.key == host_key, do: h.site end)
+    new_drift = Enum.map(new_drift, &%{&1 | site: host_site})
+
+    drift =
+      (remove_drift_for_host(state.drift, host_key) ++ new_drift)
+      |> Enum.uniq()
 
     {:noreply,
      %{
@@ -262,7 +295,8 @@ defmodule Binnacle.Fleet do
        | guests: guests,
          history: Map.put(state.history, host_key, history),
          misses: Map.put(state.misses, host_key, 0),
-         unreachable: MapSet.delete(state.unreachable, host_key)
+         unreachable: MapSet.delete(state.unreachable, host_key),
+         drift: drift
      }}
   end
 
@@ -300,8 +334,9 @@ defmodule Binnacle.Fleet do
 
   # A successful poll replaces the site's whole network picture: the gateway
   # and the device inventory behind it, stamped with the time it was read so
-  # the UI can say how fresh it is.
-  def handle_info({:unifi, slug, {:ok, %{gateway: gateway, devices: devices}}}, state) do
+  # the UI can say how fresh it is. Drift is computed from the site names
+  # the controller reports against the declared slug.
+  def handle_info({:unifi, slug, {:ok, %{gateway: gateway, devices: devices} = result}}, state) do
     network = %Model.Network{
       reachable: true,
       reason: nil,
@@ -310,7 +345,20 @@ defmodule Binnacle.Fleet do
       devices: devices
     }
 
-    {:noreply, %{state | networks: Map.put(state.networks, slug, network)}}
+    observed = Map.get(result, :site_names)
+
+    new_drift =
+      if observed do
+        Discovery.unifi_site_drift(slug, observed)
+      else
+        []
+      end
+
+    drift =
+      (remove_drift_for_site(state.drift, slug) ++ new_drift)
+      |> Enum.uniq()
+
+    {:noreply, %{state | networks: Map.put(state.networks, slug, network), drift: drift}}
   end
 
   # A failed poll marks the site's network unreachable WITH its reason, rather
@@ -374,6 +422,23 @@ defmodule Binnacle.Fleet do
     history
     |> Kernel.++([sample])
     |> Enum.take(-@history_len)
+  end
+
+  # Remove stale drift entries for a host before recomputing. Drift kinds
+  # :unknown_proxmox_node carry the host_key in their detail, so a simple
+  # string containment check is enough — the detail is built with the
+  # host_key interpolated, and a new poll either reproduces or clears it.
+  defp remove_drift_for_host(drift, host_key) do
+    Enum.reject(drift, fn d ->
+      d.kind == :unknown_proxmox_node and d.detail =~ host_key
+    end)
+  end
+
+  # Remove stale drift entries for a site (UniFi drift is keyed on site slug).
+  defp remove_drift_for_site(drift, slug) do
+    Enum.reject(drift, fn d ->
+      d.kind == :unknown_unifi_site and d.site == slug
+    end)
   end
 
   # ---- snapshot ------------------------------------------------------------
@@ -466,10 +531,16 @@ defmodule Binnacle.Fleet do
           })
         end)
 
+      site_drift = Enum.filter(state.drift, &site_matches_drift?(site.slug, &1))
+
       %{site | hosts: hosts, network: Map.get(state.networks, site.slug)}
       |> Map.merge(%{status: site_status(hosts, Map.get(state.networks, site.slug))})
+      |> Map.merge(%{drift: site_drift})
     end)
   end
+
+  defp site_matches_drift?(slug, %{site: slug}), do: true
+  defp site_matches_drift?(_slug, _drift), do: false
 
   # A site is as bad as its worst host, plus its gateway. An unreachable
   # gateway degrades the site even when every host is fine: the hosts are

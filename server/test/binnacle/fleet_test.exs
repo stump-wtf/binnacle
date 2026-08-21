@@ -309,4 +309,54 @@ defmodule Binnacle.FleetTest do
              |> Enum.all?(&(&1.telemetry == :none))
     end
   end
+
+  describe "config drift" do
+    test "Proxmox drift is surfaced when the API reports an undeclared node" do
+      fleet = start_supervised!({Fleet, name: :drift_proxmox_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir", "ghost"]}}})
+
+      drift = GenServer.call(fleet, :drift)
+      assert [entry] = drift
+      assert entry.kind == :unknown_proxmox_node
+      assert entry.observed == "ghost"
+      assert entry.detail =~ "lir"
+      assert entry.detail =~ "ghost"
+    end
+
+    test "Proxmox drift is cleared when the node stops being reported" do
+      fleet = start_supervised!({Fleet, name: :drift_clear_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir", "ghost"]}}})
+      assert GenServer.call(fleet, :drift) != []
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir"]}}})
+      assert GenServer.call(fleet, :drift) == []
+    end
+
+    test "UniFi drift is surfaced when the controller reports extra sites" do
+      fleet = start_supervised!({Fleet, name: :drift_unifi_fleet, baseline: @baseline})
+
+      send(
+        fleet,
+        {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: ["default", "guest-net"]}}}
+      )
+
+      drift = GenServer.call(fleet, :drift)
+      assert length(drift) == 2
+      assert Enum.all?(drift, &(&1.kind == :unknown_unifi_site))
+      assert Enum.all?(drift, &(&1.site == "dub"))
+    end
+
+    test "drift appears in the snapshot per-site" do
+      fleet = start_supervised!({Fleet, name: :drift_snapshot_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir", "ghost"]}}})
+
+      snapshot = GenServer.call(fleet, :snapshot)
+      wynberg = Enum.find(snapshot, &(&1.slug == "wynberg"))
+      assert wynberg.drift != []
+      assert Enum.all?(wynberg.drift, &(&1.kind == :unknown_proxmox_node))
+    end
+  end
 end

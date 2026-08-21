@@ -18,18 +18,26 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   @doc """
   Poll one Proxmox host.
 
-  Returns `{:ok, %{guests: [Guest.t()], sample: Sample.t() | nil, node_status: map()}}`
+  Returns `{:ok, %{guests: [Guest.t()], sample: Sample.t() | nil, node_status: map(), nodes: [String.t()]}}`
   or `{:error, reason}` with the failing step named. The sample is nil when
   the host answers but exposes no sensor data — missing metrics are omitted,
-  never zero-filled.
+  never zero-filled. `nodes` is the list of all node names the API reported,
+  used by the Fleet to detect config drift (a node nobody declared).
   """
   @spec fetch(String.t(), String.t(), keyword()) ::
-          {:ok, %{guests: [Guest.t()], sample: Sample.t() | nil, node_status: map()}}
+          {:ok,
+           %{
+             guests: [Guest.t()],
+             sample: Sample.t() | nil,
+             node_status: map(),
+             nodes: [String.t()]
+           }}
           | {:error, String.t()}
   def fetch(base_url, token, opts \\ []) do
     base_url = String.trim_trailing(base_url, "/")
 
-    with {:ok, node} <- request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
+    with {:ok, node, all_nodes} <-
+           request(base_url, token, "/api2/json/nodes", opts) |> nodes(opts),
          {:ok, node_status} <-
            request(base_url, token, "/api2/json/nodes/#{node}/status", opts) |> body(opts),
          {:ok, qemu} <-
@@ -48,7 +56,8 @@ defmodule Binnacle.Fleet.Proxmox.Client do
        %{
          guests: guests,
          sample: sample(node_status),
-         node_status: node_status
+         node_status: node_status,
+         nodes: all_nodes
        }}
     end
   end
@@ -58,8 +67,10 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   # node — v1 scopes one API token per host.
   defp nodes({:ok, %Req.Response{status: 200, body: body}}, _opts) do
     with {:ok, %{"data" => nodes}} <- decode_body(body, "/api2/json/nodes") do
+      all_names = Enum.map(nodes, & &1["node"])
+
       case Enum.find(nodes, &(&1["status"] == "online")) || List.first(nodes) do
-        %{"node" => name} -> {:ok, name}
+        %{"node" => name} -> {:ok, name, all_names}
         _ -> {:error, "Proxmox /api2/json/nodes returned no nodes"}
       end
     end
