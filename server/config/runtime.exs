@@ -123,6 +123,13 @@ if burst = System.get_env("BINNACLE_API_BURST") do
   config :binnacle, api_rate_burst: String.to_integer(burst)
 end
 
+# Build SHA injected by CI as a Docker build arg. Empty for a local build.
+# The footer links it back to the Gitea commit so the running version is
+# verifiable from the browser.
+if sha = System.get_env("BUILD_SHA") do
+  config :binnacle, build_sha: sha
+end
+
 # Reverse proxies whose `x-forwarded-for` the rate limiter believes: a
 # comma-separated list of addresses or CIDRs (e.g. "172.18.0.0/16,10.0.0.5").
 # binnacle sits behind Caddy, so without this the peer address is Caddy on

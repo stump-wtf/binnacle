@@ -118,10 +118,13 @@ defmodule BinnacleWeb.FleetLive do
         </div>
 
         <footer class="border-t border-line-dim pt-4">
-          <Feedback.key_hint pairs={[
-            %{key: "t", action: "theme"},
-            %{key: "enter", action: "expand"}
-          ]} />
+          <div class="flex items-center justify-between">
+            <Feedback.key_hint pairs={[
+              %{key: "t", action: "theme"},
+              %{key: "enter", action: "expand"}
+            ]} />
+            <Feedback.build_info sha={build_sha()} />
+          </div>
         </footer>
       </div>
     </div>
@@ -364,4 +367,6 @@ defmodule BinnacleWeb.FleetLive do
       n -> "gateway · #{n} devices"
     end
   end
+
+  defp build_sha, do: Application.get_env(:binnacle, :build_sha)
 end

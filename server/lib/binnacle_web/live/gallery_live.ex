@@ -266,8 +266,13 @@ defmodule BinnacleWeb.GalleryLive do
 
     ~H"""
     <footer class="border-t border-line-dim pt-4">
-      <Feedback.key_hint pairs={@pairs} />
+      <div class="flex items-center justify-between">
+        <Feedback.key_hint pairs={@pairs} />
+        <Feedback.build_info sha={build_sha()} />
+      </div>
     </footer>
     """
   end
+
+  defp build_sha, do: Application.get_env(:binnacle, :build_sha)
 end

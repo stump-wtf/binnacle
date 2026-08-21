@@ -84,4 +84,24 @@ defmodule BinnacleWeb.Ui.Feedback do
     </div>
     """
   end
+
+  @doc """
+  The build SHA, linking to the Gitea commit. Renders nothing when the SHA
+  is unset (local builds, test env) so the footer stays clean in dev.
+  """
+  attr :sha, :string, default: nil
+
+  def build_info(assigns) do
+    ~H"""
+    <a
+      :if={@sha}
+      href={"https://gitea.stump.rocks/stump.wtf/binnacle/commit/#{@sha}"}
+      target="_blank"
+      rel="noopener"
+      class="font-mono text-xs text-dim hover:text-line-bright transition-colors"
+    >
+      {@sha}
+    </a>
+    """
+  end
 end

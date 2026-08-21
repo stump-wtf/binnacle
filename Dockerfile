@@ -5,6 +5,11 @@
 #
 # amd64 only, deliberately (like stump.wtf/cairn): binnacle deploys to ie02,
 # which is amd64. Revisit if binnacle ever lands on an arm host.
+#
+# The git SHA the image was built from, passed by CI as a build arg. Empty
+# for a local build — the footer renders nothing rather than a fake hash.
+# Used at runtime to link the running build back to the Gitea commit.
+ARG BUILD_SHA
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS assets
 WORKDIR /build
 COPY server/package.json server/package-lock.json ./
@@ -38,7 +43,10 @@ COPY --from=assets /build/priv/static/assets ./priv/static/assets
 RUN mix compile --warnings-as-errors && mix release --overwrite
 
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+# Re-declare the global ARG so it is visible in this stage.
+ARG BUILD_SHA=unknown
 ENV PHX_SERVER=true PORT=8080
+ENV BUILD_SHA=$BUILD_SHA
 WORKDIR /app
 # Runtime system dependencies of an Erlang/OTP release on musl: openssl for
 # :crypto, libstdc++ for the NIFs, and ncurses-libs because beam.smp links

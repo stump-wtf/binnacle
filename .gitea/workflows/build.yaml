@@ -85,6 +85,7 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE }}:scan-${{ gitea.run_id }}
+          build-args: BUILD_SHA=${{ gitea.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
 
       # Container Smoke Test
@@ -191,5 +192,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: BUILD_SHA=${{ gitea.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
