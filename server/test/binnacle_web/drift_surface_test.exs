@@ -108,4 +108,33 @@ defmodule BinnacleWeb.DriftSurfaceTest do
       refute html =~ "config drift"
     end
   end
+
+  describe "a Site nobody grafted drift onto" do
+    # build_snapshot/1 always sets :drift, so every path exercised above has
+    # the key. The renderers still must not depend on that: a %Site{} built
+    # anywhere else — a fixture, a future controller — used to be missing the
+    # key entirely, and `site.drift` on a map without the key is a KeyError at
+    # render time rather than the nil the callers were written to handle.
+    #
+    # Writing this test turned up the same defect already sitting on :status,
+    # which build_snapshot/1 has always merged in the same way. Both fields are
+    # now declared on the struct, so this is structurally true rather than
+    # incidentally true.
+    #
+    # @joestump 08/21/2026 - Added while reviewing #66.
+
+    test "still renders, because :drift is a declared field defaulting to []" do
+      site = %Binnacle.Fleet.Model.Site{
+        slug: "dub",
+        kind: :home,
+        name: "Dublin",
+        hosts: [],
+        network: nil
+      }
+
+      assert site.drift == []
+      assert site.status == :unknown
+      assert %{drift: [], status: :unknown} = BinnacleWeb.SiteJSON.show(%{site: site})
+    end
+  end
 end

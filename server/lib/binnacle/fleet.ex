@@ -541,9 +541,15 @@ defmodule Binnacle.Fleet do
 
       site_drift = Enum.filter(flatten_drift(state.drift), &site_matches_drift?(site.slug, &1))
 
-      %{site | hosts: hosts, network: Map.get(state.networks, site.slug)}
-      |> Map.merge(%{status: site_status(hosts, Map.get(state.networks, site.slug))})
-      |> Map.merge(%{drift: site_drift})
+      network = Map.get(state.networks, site.slug)
+
+      %{
+        site
+        | hosts: hosts,
+          network: network,
+          drift: site_drift,
+          status: site_status(hosts, network)
+      }
     end)
   end
 
