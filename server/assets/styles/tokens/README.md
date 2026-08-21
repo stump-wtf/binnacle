@@ -18,20 +18,25 @@ Everything binnacle adds sits in `../theme.css` instead — that file bridges
 these tokens into Tailwind's `@theme` namespace and into daisyUI's semantic
 slots, and it is ours to edit freely.
 
-## Why `fonts.css` is not here
+## Why the upstream `tokens/fonts.css` is not here
 
 The upstream export ships a fourth file, `tokens/fonts.css`, whose whole body is
-a remote `@import url('https://fonts.googleapis.com/...')`. Two reasons it does
-not come along:
+a remote `@import url('https://fonts.googleapis.com/...')`. It does not come
+along, and neither does the `<link rel="stylesheet">` to Google Fonts that
+replaced it for a while: **both load from a remote origin, and binnacle's CSP is
+`style-src 'self'; font-src 'self'` with no remote origins.** A remote font
+stylesheet is not slow here, it is blocked — see issue #61, where all three
+families silently fell back to system fonts in production.
 
-1. A nested remote `@import` inside a Tailwind entry is render-blocking and
-   discovered late — the browser cannot start the font fetch until the CSS
-   bundle has parsed.
-2. Tailwind v4 inlines local `@import`s while bundling; a remote one is an edge
-   case not worth relying on.
+The three families (JetBrains Mono, Space Mono, Silkscreen) are therefore
+**self-hosted**: WOFF2 files in `../../priv/static/fonts/`, declared as
+`@font-face` in `../fonts.css`, which `app.css` imports. Latin and Latin-Ext
+subsets only — the app is English-only.
 
-`index.html` loads the same three families (JetBrains Mono, Space Mono,
-Silkscreen) with `preconnect` + a single stylesheet `<link>`, which is strictly
-faster and states the dependency where a reader will look for it. The
-`--font-mono` / `--font-display` / `--font-pixel` aliases that consume those
-families still live in `typography.css`, unchanged.
+Adding or changing a face means adding the WOFF2 **and** the `@font-face` block;
+`test/binnacle_web/plugs/security_headers_test.exs` fetches every URL `fonts.css`
+declares and fails if one 404s. The `--font-mono` / `--font-display` /
+`--font-pixel` aliases that consume these families still live in
+`typography.css`, unchanged.
+
+Do not reintroduce a remote font `@import` or `<link>`. It will be blocked.

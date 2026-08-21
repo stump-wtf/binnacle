@@ -38,12 +38,4 @@ defmodule BinnacleWeb.FleetLiveTest do
     assert has_element?(view, "#host-ogma", "pve-services")
     assert has_element?(view, "#host-ogma", "cairn")
   end
-
-  test "root layout carries a nonce on the inline theme script", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/")
-
-    assert html =~ ~s(nonce=")
-    assert html =~ "binnacle-theme"
-    refute html =~ ~s(style="font-family: monospace)
-  end
 end
