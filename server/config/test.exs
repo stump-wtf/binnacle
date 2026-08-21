@@ -30,3 +30,6 @@ config :binnacle, api_token: "test-token", api_rate_burst: 100_000
 # draw without a live fleet. Deliberately absent in prod — see
 # Binnacle.Fleet's moduledoc.
 config :binnacle, synthetic_metrics: true
+
+# No proxy in front of the test endpoint; individual tests override this.
+config :binnacle, trusted_proxies: []

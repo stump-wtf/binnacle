@@ -67,3 +67,8 @@ config :phoenix_live_view,
 # draw without a live fleet. Deliberately absent in prod — see
 # Binnacle.Fleet's moduledoc.
 config :binnacle, synthetic_metrics: true
+
+# Nothing proxies the dev server, so the peer address is the client and
+# x-forwarded-for is not believed. Set explicitly so the rate limiter's
+# "you are behind a proxy and have not said which" boot warning stays quiet.
+config :binnacle, trusted_proxies: []
