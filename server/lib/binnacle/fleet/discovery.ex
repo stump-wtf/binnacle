@@ -41,10 +41,15 @@ defmodule Binnacle.Fleet.Discovery do
   reports.
 
   Every controller in this fleet answers "default", so a match is not
-  expected and is not what this checks for. What it catches is a controller
-  that has been given MORE than one site, or renamed away from the one it
-  had: either means the property's network was re-organized underneath a
-  declaration that still says otherwise.
+  expected and is not what this checks for. What it catches is a *count*: one
+  site is the normal shape, and anything else means the property's network was
+  re-organized underneath a declaration that still says otherwise — either
+  more than one site, or none at all.
+
+  A single site is never drift regardless of what it is called. Comparing that
+  name to binnacle's slug would report drift on every site forever, because the
+  two are not the same kind of name: the slug names a property, and the
+  controller's site name names nothing.
 
   `declared` is binnacle's slug for the property; `observed` are the site
   names the controller returned.
