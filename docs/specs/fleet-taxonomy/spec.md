@@ -186,18 +186,19 @@ All concurrent operations MUST follow safe concurrency patterns:
 - **WHEN** the server shuts down while discovery polls are in flight
 - **THEN** pollers stop issuing new requests and in-flight results are discarded without corrupting the inventory
 
-### Requirement: Database Operation Standards
+### Requirement: Persistence — Crash Survival via DETS
 
-All persistence operations MUST follow structured data access patterns:
+> **Amended 2026-08-21 by ADR-0007.** The original "Database Operation Standards" requirement assumed a relational database (Ecto/SQLite/Postgres). ADR-0007 decided against that: binnacle persists the last N samples per host to a DETS table for crash survival, not a database. The clauses about parameterized statements and schema init are withdrawn — they describe a database the decision is not to use. The atomic-write clause survives, restated below for the DETS shape.
 
-- Multi-step inventory updates MUST be applied atomically (single transaction per discovery cycle result)
-- Query parameters MUST use parameterized statements — string interpolation in queries MUST NOT occur
-- The store MUST tolerate startup against a nonexistent database file by initializing schema
+- The per-host history MUST be written to a DETS table on every sample tick so a restart restores the trend window
+- The write per host per tick MUST be atomic — a failure mid-write leaves the prior history intact
+- The table MUST tolerate startup against a nonexistent file by creating it
+- Long-term retention ("was this host hot last week") is out of scope — the fleet's Prometheus/Beszel stack owns that, not binnacle
 
-#### Scenario: Discovery result applied atomically
+#### Scenario: History survives a restart
 
-- **WHEN** a Proxmox poll returns guests and metrics
-- **THEN** the inventory update for that host is applied in one transaction — a failure mid-write leaves the prior snapshot intact
+- **WHEN** binnacle restarts
+- **THEN** the trend lines show the last N samples from before the restart, not an empty window
 
 ## Security Requirements
 
