@@ -29,8 +29,17 @@
    needs no dark: variants anywhere in the Gren code.
    ============================================================ */
 
-@source "../lib";
-@source "../assets/js";
+/* Tailwind resolves @source relative to THIS file, which lives in
+   server/assets/styles/. The templates are at server/lib and the JS at
+   server/assets/js, so the paths need two levels up and one level up
+   respectively. `../lib` pointed at server/assets/lib, which has never
+   existed — the directive matched nothing, and every utility in the bundle
+   was there courtesy of Tailwind v4's automatic source detection instead.
+   That worked on a laptop, where the whole repo is on disk, and produced a
+   bundle with no utilities at all inside the Docker assets stage, which only
+   has server/assets. */
+@source "../../lib";
+@source "../js";
 
 @theme inline {
   /* ---- Brand + neon ---------------------------------------- */

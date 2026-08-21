@@ -18,7 +18,20 @@ COPY server/package.json server/package-lock.json ./
 RUN npm ci
 COPY server/vite.config.js ./
 COPY server/assets ./assets
+# The templates, for Tailwind to scan. Utility classes appear ONLY inside the
+# .ex/.heex files under lib/ — nothing in assets/ mentions `flex` or
+# `text-dim` — so a bundle built without them compiles cleanly and ships a
+# stylesheet with the preflight, the theme tokens and the @font-face blocks
+# but not one layout rule. That is a silent failure: `npm run build` exits 0
+# and the CSS is a plausible 33KB.
+COPY server/lib ./lib
 RUN npm run build
+# Fail the build here rather than in a browser. A stylesheet with no
+# utilities renders every page as unstyled flow content, and neither the
+# compile, the test suite, nor the container smoke test can see it — the
+# smoke test asks for HTTP 200 and gets one.
+RUN grep -q '\.flex{' priv/static/assets/app.css \
+  || (echo "app.css has no Tailwind utilities — did the template sources reach this stage?" && exit 1)
 
 FROM elixir:1.20-alpine@sha256:89d8a6f92b631d9916261371ffaf10589a57d08c5487cd042c884f1fd89ae6fb AS release
 WORKDIR /build
