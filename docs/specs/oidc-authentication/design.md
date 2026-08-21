@@ -73,7 +73,7 @@ Rejecting HMAC *before* key lookup rather than after is the specific defence aga
 
 ### Sessions are Phoenix cookies; revocation is the price
 
-**Choice**: `Plug.Session` with `store: :cookie`, signed **and encrypted**, `secure: true`, `http_only: true`, `same_site: "Lax"`, a `max_age` matching a 12-hour cap, no `:domain`, and both salts from config. No session store, no ETS table, no purge.
+**Choice**: `Plug.Session` with `store: :cookie`, signed **and encrypted**, `secure: true`, `http_only: true`, `same_site: "Lax"`, a `max_age` matching a 1-hour cap, no `:domain`, and both salts from config. No session store, no ETS table, no purge.
 
 **Rationale**: The Gren draft's opaque server-side identifier existed because Gren could not sign or encrypt a cookie. Its revocation property was a consequence of that constraint, not its purpose. With Phoenix's own session mechanism available, building a bespoke store means owning supervision, expiry sweeps, and novel security-critical code for a household fleet console with a handful of users.
 
@@ -81,7 +81,7 @@ Rejecting HMAC *before* key lookup rather than after is the specific defence aga
 
 1. An `exp` claim **inside** the payload, checked on every request and every mount including reconnects — the client's `Max-Age` is not trusted to enforce expiry.
 2. `live_socket_id` plus `Endpoint.broadcast/3` on logout, which terminates connected LiveViews immediately. This is a disconnect, not a revocation, and is described that way deliberately.
-3. The 12-hour cap itself.
+3. The 1-hour cap itself.
 
 **Revisit trigger**: a shared workstation, a lost device, or a per-user authorization model where demotion must take effect at once. Any of those makes a server-side store the right answer, and none of them is true today.
 
@@ -121,7 +121,7 @@ The enforcement is structural rather than conventional: a pipeline that never re
 
 **Choice**: `POST /auth/logout` clears the session, broadcasts the socket disconnect, and redirects to `end_session_endpoint` with `id_token_hint`. The ID token is retained in the session solely to supply that hint.
 
-**Rationale**: Pocket ID's discovery document advertises neither `frontchannel_logout_supported` nor `backchannel_logout_supported`, so the IdP cannot push a logout into binnacle. Redirecting to the end-session endpoint at least signs the user out at the provider, rather than leaving them silently re-admitted on the next login attempt. It also means an account disabled at the IdP keeps working in binnacle until the session expires — which is the concrete reason 12 hours is a cap rather than an opening bid.
+**Rationale**: Pocket ID's discovery document advertises neither `frontchannel_logout_supported` nor `backchannel_logout_supported`, so the IdP cannot push a logout into binnacle. Redirecting to the end-session endpoint at least signs the user out at the provider, rather than leaving them silently re-admitted on the next login attempt. It also means an account disabled at the IdP keeps working in binnacle until the session expires — which is the concrete reason the cap is one hour rather than a working-day default.
 
 ## Architecture
 
@@ -197,7 +197,7 @@ sequenceDiagram
 
 ## Risks / Trade-offs
 
-- **Logout is not revocation.** → Bounded by a 12-hour cap, an `exp` claim checked server-side on every request and mount, and a socket disconnect broadcast on logout. Revisit if the threat model gains a shared or lost device.
+- **Logout is not revocation.** → Bounded by a 1-hour cap, an `exp` claim checked server-side on every request and mount, and a socket disconnect broadcast on logout. Revisit if the threat model gains a shared or lost device.
 - **The IdP cannot push a logout.** → Pocket ID supports neither front- nor back-channel logout. Same bound: session lifetime. RP-initiated logout at least ends the IdP session.
 - **Auth is enforced in two places that must agree.** → The `on_mount` hook and the plug consume the same session and build the same identity struct; a `LiveViewTest` against an invalidated session is a required test, not an optional one.
 - **Boot-time dependency on Pocket ID.** → `backoff_type: :exponential` keeps the container up and retrying instead of refusing to start. Logins degrade; the fleet view does not disappear.
@@ -205,7 +205,7 @@ sequenceDiagram
 - **`PHX_HOST` is unset**, so absolute URLs generate as `example.com`. → Latent while LiveView uses relative URLs; a hard failure the moment `redirect_uri` must be absolute.
 - **The Dockerfile HEALTHCHECK probes `/`**, which gets gated. → Move it to `/healthz` no later than the change that gates `/`, or the container is permanently unhealthy.
 - **`plain` PKCE and `id_token` responses are on the provider's menu.** → Pinned explicitly in code, not left to library defaults, and asserted in tests.
-- **12-hour sessions on a fleet console are a judgement call.** → Long enough to avoid re-login during a working day, short enough that a forgotten browser is not indefinite. Cheap to shorten; with no revocation it is also the only lever.
+- **Session length is the only security lever in this design.** → With no revocation, the cap is simultaneously the window a stolen cookie works, the window a logged-out cookie works, and the window a disabled account still reaches binnacle. Set to **1 hour** deliberately, accepting more re-logins in exchange for not building a session store. Lengthening it is a security decision, not a UX tweak.
 
 ## Migration Plan
 
@@ -222,8 +222,8 @@ There is no interim gate. The Gren-era plan opened by enabling `oauth2_proxy.ena
 
 ## Open Questions
 
-- **Is 12 hours right?** Chosen as a working-day default with no data behind it. It matters more here than it did in the Gren draft, because it is now the *only* bound on a replayed cookie.
-- **Does the revocation gap need closing before control actions ship?** A read-only console with a 12-hour session is a different risk from a console that can restart containers. The honest answer is that it should be re-asked when the first mutating route is written, not now.
+- **Is 1 hour right?** Chosen deliberately as the trade for having no revocation — it is the *only* bound on a replayed cookie, on a logged-out cookie, and on a disabled account. If it proves annoying in practice, the answer is a session store (which makes length a convenience question again), not a longer cap.
+- **Does the revocation gap need closing before control actions ship?** A read-only console with a 1-hour session is a different risk from a console that can restart containers. The honest answer is that it should be re-asked when the first mutating route is written, not now.
 - **Where do control actions get audited?** ADR-0006 defers this. The session supplies the identity to attribute an action to; it does not decide whether binnacle keeps its own audit log or writes to an existing one.
 - **Does `groups` become authorization, and when?** Captured today, unused today. The moment "every authenticated Pocket ID user is a full binnacle user" stops being acceptable, it is an ADR, not a spec amendment.
 - **Do the fleet pollers ever need per-user API access?** Today `/api/**` is one machine token. Per-user API access would be a new decision — token exchange, or per-user tokens — not a loosening of the no-crossover rule.
