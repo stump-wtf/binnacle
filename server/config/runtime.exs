@@ -123,10 +123,16 @@ if burst = System.get_env("BINNACLE_API_BURST") do
   config :binnacle, api_rate_burst: String.to_integer(burst)
 end
 
-# Build SHA injected by CI as a Docker build arg. Empty for a local build.
-# The footer links it back to the Gitea commit so the running version is
-# verifiable from the browser.
-if sha = System.get_env("BUILD_SHA") do
+# Build SHA injected by CI as a Docker build arg. The footer links it back to
+# the Gitea commit so the running version is verifiable from the browser.
+#
+# An unstamped build must leave this unset rather than store a placeholder.
+# The Dockerfile's ARG defaults to "unknown" so a bare `docker build` still
+# produces a runnable image, and `System.get_env/1` returns "" for an empty
+# build-arg — both are truthy in Elixir, so guarding on presence alone stored
+# a placeholder and the footer linked to /commit/unknown. Feedback.normalize_sha/1
+# is the single definition of what counts as a real stamp.
+if sha = BinnacleWeb.Ui.Feedback.normalize_sha(System.get_env("BUILD_SHA")) do
   config :binnacle, build_sha: sha
 end
 

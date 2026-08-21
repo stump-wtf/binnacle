@@ -86,22 +86,48 @@ defmodule BinnacleWeb.Ui.Feedback do
   end
 
   @doc """
-  The build SHA, linking to the Gitea commit. Renders nothing when the SHA
-  is unset (local builds, test env) so the footer stays clean in dev.
+  The build SHA, linking to the Gitea commit.
+
+  Renders nothing unless the SHA is a real one. `nil`, blank, and the literal
+  `"unknown"` all mean "this build was not stamped" — the Dockerfile's `ARG`
+  defaults to `unknown` so a local `docker build` still produces a runnable
+  image — and every one of them is truthy in Elixir, so the guard has to be
+  about the *value*, not its presence. A footer linking to `/commit/unknown`
+  is worse than an empty footer: it looks authoritative and 404s.
+
+  The link text is the short SHA because this renders on a wall display and a
+  40-character hash is noise at that distance. The full value stays in the
+  `title` so it is still readable and copyable up close.
   """
   attr :sha, :string, default: nil
 
   def build_info(assigns) do
+    assigns = assign(assigns, :sha, normalize_sha(assigns[:sha]))
+
     ~H"""
     <a
       :if={@sha}
       href={"https://gitea.stump.rocks/stump.wtf/binnacle/commit/#{@sha}"}
+      title={@sha}
       target="_blank"
-      rel="noopener"
+      rel="noopener noreferrer"
       class="font-mono text-xs text-dim hover:text-line-bright transition-colors"
     >
-      {@sha}
+      {String.slice(@sha, 0, 12)}
     </a>
     """
   end
+
+  @doc """
+  `nil` unless the argument is a real build stamp. Exposed so `runtime.exs`
+  and the component agree on what counts, rather than each having its own idea.
+  """
+  def normalize_sha(sha) when is_binary(sha) do
+    case String.trim(sha) do
+      "" -> nil
+      trimmed -> if String.downcase(trimmed) == "unknown", do: nil, else: trimmed
+    end
+  end
+
+  def normalize_sha(_), do: nil
 end

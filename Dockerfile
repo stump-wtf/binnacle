@@ -6,9 +6,11 @@
 # amd64 only, deliberately (like stump.wtf/cairn): binnacle deploys to ie02,
 # which is amd64. Revisit if binnacle ever lands on an arm host.
 #
-# The git SHA the image was built from, passed by CI as a build arg. Empty
-# for a local build — the footer renders nothing rather than a fake hash.
-# Used at runtime to link the running build back to the Gitea commit.
+# The git SHA the image was built from, passed by CI as a build arg and read
+# at runtime to link the running build back to the Gitea commit. A build that
+# does not pass it falls through to the `unknown` default in the runtime
+# stage; runtime.exs treats that as "not stamped" and the footer renders
+# nothing, rather than a link to /commit/unknown.
 ARG BUILD_SHA
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS assets
 WORKDIR /build
