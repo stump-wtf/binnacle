@@ -13,7 +13,7 @@ COPY server/vite.config.js ./
 COPY server/assets ./assets
 RUN npm run build
 
-FROM elixir:1.20-alpine@sha256:907472a269b587722a88efd5528b17920b873e8fc5a5ab27e276e80b53eb6f09 AS release
+FROM elixir:1.20-alpine@sha256:89d8a6f92b631d9916261371ffaf10589a57d08c5487cd042c884f1fd89ae6fb AS release
 WORKDIR /build
 # MIX_ENV=prod for the whole stage, hoisted above deps.compile. Setting it
 # just before `mix compile` fixes the build but leaves deps.compile running
