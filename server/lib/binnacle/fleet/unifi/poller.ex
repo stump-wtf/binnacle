@@ -79,10 +79,16 @@ defmodule Binnacle.Fleet.Unifi.Poller do
     {:noreply, state, {:continue, :reschedule}}
   end
 
+  # Client.fetch_sites/3 returns %Site{}, but :fetch_sites is an injectable
+  # seam and drift is secondary to the device inventory — so an unexpected
+  # shape is described, never raised on. `to_string/1` here raised
+  # Protocol.UndefinedError on any map without a "name" key, which would take
+  # the poller down mid-cycle and lose the device poll that had just
+  # succeeded.
   defp site_name(%Binnacle.Fleet.Model.Site{slug: slug}), do: slug
-  defp site_name(%{"name" => name}), do: name
+  defp site_name(%{"name" => name}) when is_binary(name), do: name
   defp site_name(name) when is_binary(name), do: name
-  defp site_name(other), do: to_string(other)
+  defp site_name(other), do: inspect(other)
 
   @impl true
   def handle_continue(:reschedule, state) do

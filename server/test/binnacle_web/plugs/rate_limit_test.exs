@@ -21,11 +21,30 @@ defmodule BinnacleWeb.Plugs.RateLimitTest do
     # than deleting it out from under its owner.
     :ets.delete_all_objects(Buckets.table())
 
+    # Every one of these is global, so every one has to be put back. Only
+    # :trusted_proxies used to be restored, which left the whole rest of the
+    # run on a burst of 3 instead of config/test.exs's 100_000 — so whichever
+    # API test happened to be scheduled after this file 429'd, seed-dependent.
+    previous =
+      for key <- [:api_rate_per_second, :api_rate_burst, :trusted_proxies],
+          do: {key, Application.get_env(:binnacle, key)}
+
     Application.put_env(:binnacle, :api_rate_per_second, 10)
     Application.put_env(:binnacle, :api_rate_burst, 3)
     Application.put_env(:binnacle, :trusted_proxies, [])
 
-    on_exit(fn -> Application.put_env(:binnacle, :trusted_proxies, []) end)
+    # delete_env, not put_env(nil), for a key that had no value: the plug reads
+    # these with `Application.get_env(key, default)`, and an explicitly-stored
+    # nil beats the default — which turns the next request's arithmetic into
+    # `n * nil` and 500s instead of rate-limiting.
+    on_exit(fn ->
+      for {key, value} <- previous do
+        case value do
+          nil -> Application.delete_env(:binnacle, key)
+          value -> Application.put_env(:binnacle, key, value)
+        end
+      end
+    end)
 
     :ok
   end

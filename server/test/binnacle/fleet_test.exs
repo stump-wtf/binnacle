@@ -348,6 +348,121 @@ defmodule Binnacle.FleetTest do
       assert Enum.all?(drift, &(&1.site == "dub"))
     end
 
+    test "UniFi drift is surfaced when the controller reports no sites at all" do
+      fleet = start_supervised!({Fleet, name: :drift_unifi_empty_fleet, baseline: @baseline})
+
+      send(fleet, {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: []}}})
+
+      assert [entry] = GenServer.call(fleet, :drift)
+      assert entry.kind == :unknown_unifi_site
+      assert entry.detail =~ "no sites at all"
+    end
+
+    test "UniFi drift clears when the controller settles back to one site" do
+      fleet = start_supervised!({Fleet, name: :drift_unifi_clear_fleet, baseline: @baseline})
+
+      send(
+        fleet,
+        {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: ["default", "guest-net"]}}}
+      )
+
+      assert GenServer.call(fleet, :drift) != []
+
+      send(fleet, {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: ["default"]}}})
+
+      assert GenServer.call(fleet, :drift) == []
+    end
+
+    test "a clean poll from one host does not clear another host's drift" do
+      # Drift used to be one flat list cleared by testing `detail =~ host_key`.
+      # `=~` is substring containment and the detail carries the OBSERVED node
+      # name as well as the host key, so dagda's finding about a node called
+      # "lir-old" was deleted the moment host "lir" polled cleanly.
+      fleet = start_supervised!({Fleet, name: :drift_collision_fleet, baseline: @baseline})
+
+      send(
+        fleet,
+        {:proxmox, "dagda", {:ok, %{guests: [], sample: nil, nodes: ["dagda", "lir-old"]}}}
+      )
+
+      assert [entry] = GenServer.call(fleet, :drift)
+      assert entry.observed == "lir-old"
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir"]}}})
+
+      assert [^entry] = GenServer.call(fleet, :drift),
+             "lir's clean poll cleared drift that belongs to dagda"
+    end
+
+    test "a UniFi poll that could not read sites leaves the last answer standing" do
+      # site_names is nil when fetch_sites failed but fetch_devices succeeded.
+      # That is "not observed", not "no drift" — retracting a real finding on a
+      # transient controller hiccup is worse than showing it a cycle late.
+      fleet = start_supervised!({Fleet, name: :drift_unifi_nil_fleet, baseline: @baseline})
+
+      send(
+        fleet,
+        {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: ["default", "guest-net"]}}}
+      )
+
+      before = GenServer.call(fleet, :drift)
+      assert length(before) == 2
+
+      send(fleet, {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: nil}}})
+
+      assert GenServer.call(fleet, :drift) == before
+    end
+
+    test "a Proxmox poll that reports no node list leaves the last answer standing" do
+      fleet = start_supervised!({Fleet, name: :drift_proxmox_nil_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir", "ghost"]}}})
+      before = GenServer.call(fleet, :drift)
+      assert before != []
+
+      # No :nodes key at all — a poller that does not report them.
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil}}})
+
+      assert GenServer.call(fleet, :drift) == before
+    end
+
+    test "Proxmox and UniFi drift coexist without clearing each other" do
+      fleet = start_supervised!({Fleet, name: :drift_mixed_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir", "ghost"]}}})
+
+      send(
+        fleet,
+        {:unifi, "dub", {:ok, %{gateway: nil, devices: [], site_names: ["default", "guest-net"]}}}
+      )
+
+      drift = GenServer.call(fleet, :drift)
+      assert Enum.count(drift, &(&1.kind == :unknown_proxmox_node)) == 1
+      assert Enum.count(drift, &(&1.kind == :unknown_unifi_site)) == 2
+
+      # Another clean Proxmox poll must not touch the UniFi findings.
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir"]}}})
+
+      drift = GenServer.call(fleet, :drift)
+      assert Enum.count(drift, &(&1.kind == :unknown_proxmox_node)) == 0
+      assert Enum.count(drift, &(&1.kind == :unknown_unifi_site)) == 2
+    end
+
+    test "a node entry with no name is not reported as a node called nil" do
+      fleet = start_supervised!({Fleet, name: :drift_nil_node_fleet, baseline: @baseline})
+
+      send(fleet, {:proxmox, "lir", {:ok, %{guests: [], sample: nil, nodes: ["lir"]}}})
+
+      assert GenServer.call(fleet, :drift) == []
+    end
+
+    test "a site with no drift reports an empty list, not a missing key" do
+      fleet = start_supervised!({Fleet, name: :drift_absent_fleet, baseline: @baseline})
+
+      snapshot = GenServer.call(fleet, :snapshot)
+      assert Enum.all?(snapshot, &(&1.drift == []))
+    end
+
     test "drift appears in the snapshot per-site" do
       fleet = start_supervised!({Fleet, name: :drift_snapshot_fleet, baseline: @baseline})
 

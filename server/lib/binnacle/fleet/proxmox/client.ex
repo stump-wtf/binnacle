@@ -67,7 +67,9 @@ defmodule Binnacle.Fleet.Proxmox.Client do
   # node — v1 scopes one API token per host.
   defp nodes({:ok, %Req.Response{status: 200, body: body}}, _opts) do
     with {:ok, %{"data" => nodes}} <- decode_body(body, "/api2/json/nodes") do
-      all_names = Enum.map(nodes, & &1["node"])
+      # A node entry without a "node" key yields nil, which is not a name and
+      # would otherwise be reported as an undeclared node called `nil`.
+      all_names = nodes |> Enum.map(& &1["node"]) |> Enum.filter(&is_binary/1)
 
       case Enum.find(nodes, &(&1["status"] == "online")) || List.first(nodes) do
         %{"node" => name} -> {:ok, name, all_names}

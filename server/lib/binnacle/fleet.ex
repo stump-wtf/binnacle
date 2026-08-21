@@ -235,7 +235,7 @@ defmodule Binnacle.Fleet do
       misses: %{},
       unreachable: MapSet.new(),
       networks: %{},
-      drift: []
+      drift: %{}
     }
 
     state = sample(state)
@@ -250,7 +250,7 @@ defmodule Binnacle.Fleet do
 
   @impl true
   def handle_call(:drift, _from, state) do
-    {:reply, state.drift, state}
+    {:reply, flatten_drift(state.drift), state}
   end
 
   @impl true
@@ -277,17 +277,19 @@ defmodule Binnacle.Fleet do
     history = push_history(Map.get(state.history, host_key, []), sample)
 
     # Compute drift: a node the API names that no baseline host declares.
-    observed_nodes = Map.get(result, :nodes, [])
-    declared_keys = Enum.map(state.hosts, & &1.key)
-    new_drift = Discovery.proxmox_node_drift(host_key, declared_keys, observed_nodes)
-
-    # Tag Proxmox drift with the host's site so the snapshot can group it.
-    host_site = Enum.find_value(state.hosts, fn h -> if h.key == host_key, do: h.site end)
-    new_drift = Enum.map(new_drift, &%{&1 | site: host_site})
-
+    # A result without :nodes is a poller that does not report them, which is
+    # not evidence of no drift — leave whatever this host last said standing.
     drift =
-      (remove_drift_for_host(state.drift, host_key) ++ new_drift)
-      |> Enum.uniq()
+      put_drift(state.drift, {:proxmox, host_key}, Map.get(result, :nodes), fn nodes ->
+        declared_keys = Enum.map(state.hosts, & &1.key)
+
+        # Tag Proxmox drift with the host's site so the snapshot can group it.
+        host_site = Enum.find_value(state.hosts, fn h -> if h.key == host_key, do: h.site end)
+
+        host_key
+        |> Discovery.proxmox_node_drift(declared_keys, nodes)
+        |> Enum.map(&%{&1 | site: host_site})
+      end)
 
     {:noreply,
      %{
@@ -345,18 +347,14 @@ defmodule Binnacle.Fleet do
       devices: devices
     }
 
-    observed = Map.get(result, :site_names)
-
-    new_drift =
-      if observed do
-        Discovery.unifi_site_drift(slug, observed)
-      else
-        []
-      end
-
+    # site_names is nil when the sites call failed while the device call
+    # succeeded. That is "not observed this cycle", not "no drift" — clearing
+    # on it would make a transient controller hiccup silently retract a real
+    # finding, so the previous answer stands until a poll actually observes.
     drift =
-      (remove_drift_for_site(state.drift, slug) ++ new_drift)
-      |> Enum.uniq()
+      put_drift(state.drift, {:unifi, slug}, Map.get(result, :site_names), fn names ->
+        Discovery.unifi_site_drift(slug, names)
+      end)
 
     {:noreply, %{state | networks: Map.put(state.networks, slug, network), drift: drift}}
   end
@@ -424,21 +422,31 @@ defmodule Binnacle.Fleet do
     |> Enum.take(-@history_len)
   end
 
-  # Remove stale drift entries for a host before recomputing. Drift kinds
-  # :unknown_proxmox_node carry the host_key in their detail, so a simple
-  # string containment check is enough — the detail is built with the
-  # host_key interpolated, and a new poll either reproduces or clears it.
-  defp remove_drift_for_host(drift, host_key) do
-    Enum.reject(drift, fn d ->
-      d.kind == :unknown_proxmox_node and d.detail =~ host_key
-    end)
+  # Drift is stored per source — {:proxmox, host_key} or {:unifi, slug} — so a
+  # poll replaces exactly what that source last reported and nothing else.
+  #
+  # An earlier shape kept one flat list and cleared a host's entries by testing
+  # `detail =~ host_key`. `=~` is substring containment, and the detail carries
+  # the observed node name as well as the host key, so a host named `lir` polling
+  # successfully would delete dagda's finding about an undeclared node `lir-old`.
+  # Keying the source removes the ambiguity instead of escaping around it.
+  #
+  # `observed` of nil means the poll did not observe this dimension at all. That
+  # is not the same as observing nothing: the prior answer is left in place
+  # rather than retracted.
+  defp put_drift(drift, _source, nil, _compute), do: drift
+
+  defp put_drift(drift, source, observed, compute) do
+    case compute.(observed) do
+      [] -> Map.delete(drift, source)
+      entries -> Map.put(drift, source, entries)
+    end
   end
 
-  # Remove stale drift entries for a site (UniFi drift is keyed on site slug).
-  defp remove_drift_for_site(drift, slug) do
-    Enum.reject(drift, fn d ->
-      d.kind == :unknown_unifi_site and d.site == slug
-    end)
+  defp flatten_drift(drift) do
+    drift
+    |> Enum.sort_by(fn {source, _} -> source end)
+    |> Enum.flat_map(fn {_source, entries} -> entries end)
   end
 
   # ---- snapshot ------------------------------------------------------------
@@ -531,7 +539,7 @@ defmodule Binnacle.Fleet do
           })
         end)
 
-      site_drift = Enum.filter(state.drift, &site_matches_drift?(site.slug, &1))
+      site_drift = Enum.filter(flatten_drift(state.drift), &site_matches_drift?(site.slug, &1))
 
       %{site | hosts: hosts, network: Map.get(state.networks, site.slug)}
       |> Map.merge(%{status: site_status(hosts, Map.get(state.networks, site.slug))})

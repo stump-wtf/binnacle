@@ -279,7 +279,7 @@ defmodule Binnacle.Fleet.ProxmoxTest do
           case conn.request_path do
             "/api2/json/nodes" -> pve_json(%{"data" => [%{"node" => "pve1"}]})
             "/api2/json/nodes/pve1/status" -> pve_json(%{"data" => %{"cpu" => 0.1}})
-            path -> pve_json(%{"data" => []})
+            _path -> pve_json(%{"data" => []})
           end
 
         conn
@@ -288,6 +288,49 @@ defmodule Binnacle.Fleet.ProxmoxTest do
       end
 
       assert {:ok, %{sample: nil}} = Client.fetch("https://pve1.example:8006", "tok", plug: plug)
+    end
+
+    test "reports every node the endpoint names, not just the one it polls" do
+      # The Fleet compares this list against the declared host keys, so a node
+      # dropped here is drift that never gets surfaced.
+      plug = nodes_plug([%{"node" => "pve1", "status" => "online"}, %{"node" => "ghost"}])
+
+      assert {:ok, %{nodes: nodes}} =
+               Client.fetch("https://pve1.example:8006", "tok", plug: plug)
+
+      assert nodes == ["pve1", "ghost"]
+    end
+
+    test "a node entry with no name is dropped rather than reported as nil" do
+      plug = nodes_plug([%{"node" => "pve1", "status" => "online"}, %{"status" => "offline"}])
+
+      assert {:ok, %{nodes: nodes}} =
+               Client.fetch("https://pve1.example:8006", "tok", plug: plug)
+
+      assert nodes == ["pve1"]
+    end
+
+    test "no nodes at all stays an error rather than an empty node list" do
+      plug = nodes_plug([])
+
+      assert {:error, reason} = Client.fetch("https://pve1.example:8006", "tok", plug: plug)
+      assert reason =~ "no nodes"
+    end
+  end
+
+  # A PVE endpoint whose /nodes answer is `nodes` and whose every other path
+  # answers an empty data list.
+  defp nodes_plug(nodes) do
+    fn conn ->
+      body =
+        case conn.request_path do
+          "/api2/json/nodes" -> pve_json(%{"data" => nodes})
+          _path -> pve_json(%{"data" => []})
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, body)
     end
   end
 
