@@ -1,66 +1,94 @@
 ---
 status: draft
-date: 2026-08-15
-implements: [ADR-0004]
+date: 2026-08-21
+implements: [ADR-0006]
 ---
 
-# SPEC-0003: OIDC Authentication — Pocket ID Login and Server-Side Sessions
+# SPEC-0003: OIDC Authentication — Pocket ID Login and Phoenix Sessions
 
 ## Overview
 
-binnacle authenticates its users against Pocket ID v2 (`identity.stump.rocks`) as a native OIDC confidential client running in the Gren server, per ADR-0004. The server performs the authorization code flow, holds the client secret, validates the ID token, and issues an opaque server-side session carried by an `HttpOnly` cookie. No token, refresh token, or client secret is ever exposed to browser JavaScript.
+binnacle authenticates its users against Pocket ID v2 (`identity.stump.rocks`) as a native OIDC confidential client running in the Phoenix server, per ADR-0006. The server performs the authorization code flow with PKCE, holds the client secret, **verifies the ID token's signature**, and issues a signed-and-encrypted Phoenix session cookie. No token, refresh token, or client secret is ever exposed to browser JavaScript.
 
 This spec covers the login and session boundary only. Per-user *authorization* — who may control which host, guest, or container — is deliberately out of scope and awaits its own ADR once control actions exist.
+
+> **Rewritten 2026-08-21 for Elixir/Phoenix.** This spec was drafted against the Gren stack that ADR-0004 superseded, and its governing ADR was renumbered from ADR-0004 to ADR-0006 in the same pass. Requirements that reasoned from Gren's lack of cryptography — the crypto task port, the signature exemption, the bespoke session store, the `packages/core` identity type, the `GET /api/session` endpoint, and the interim oauth2-proxy gate — are removed or replaced. ADR-0006 carries a table of every reversal and why the original existed; this document states only the current requirements.
+
+Two facts about the shipped application shape everything below and are stated once here rather than repeated:
+
+* **The UI is LiveView, not an SPA.** A router pipeline runs on the initial dead render and never again. Every requirement that gates a route therefore has a socket half as well as an HTTP half.
+* **`/api/**` is a machine surface.** It already authenticates with a static bearer token for integrations. It is not a browser API, and this spec no longer claims it requires a session.
 
 ## Requirements
 
 ### Requirement: Unauthenticated Access Boundary
 
-The server SHALL require an authenticated session for every route except those explicitly enumerated as public. Public routes are limited to the health probe, the static SPA bundle, and the two endpoints that by definition run before a session exists.
+The server SHALL require an authenticated session for every route except those explicitly enumerated as public. Gating SHALL be the default: a route added with no explicit public designation is gated.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/healthz` | Public | Container HEALTHCHECK and the deploy lane's readiness probe. MUST NOT redirect, MUST NOT set cookies, and MUST answer before the session store is reachable. |
-| GET | `/` and `/assets/*` | Public | The SPA shell and its hashed bundle. Justified because the bundle is compiled application code containing no fleet data; every endpoint that returns fleet data is gated. |
+| GET | `/healthz` | Public | Container HEALTHCHECK and the deploy lane's readiness probe. MUST NOT redirect, MUST NOT set cookies, and MUST NOT be rate limited. |
+| GET | `/assets/*` | Public | Hashed static assets served by `Plug.Static`. Compiled application code containing no fleet data. |
 | GET | `/auth/login` | Public | Initiates the authorization request. Unauthenticated by definition. |
 | GET | `/auth/callback` | Public | The IdP redirects the browser here before a session exists. Unauthenticated by definition. |
-| POST | `/auth/logout` | Required | Destroys the session. |
-| GET | `/api/session` | Required | Returns the authenticated identity. |
-| GET | `/api/**` | Required | All fleet data. |
+| POST | `/auth/logout` | Session | Ends the session. `POST` only. |
+| GET | `/` and all LiveView routes | Session | Fleet data. Gated by the router plug **and** by `on_mount` inside a `live_session`. |
+| GET | `/api/**` | **Bearer token** | Machine integrations (SPEC-0001). Authenticated by `BINNACLE_API_TOKEN`, **not** by a browser session — see "Two Authentication Schemes, No Crossover". |
 
-An unauthenticated request to a gated route SHALL receive `401` when it is an API request (`/api/**`), and a `302` to `/auth/login` otherwise. API requests MUST NOT be answered with a redirect, because a redirect to an HTML login page is indistinguishable from success to a `fetch` caller and surfaces as a JSON parse error rather than an auth failure.
+An unauthenticated request to a gated **page or LiveView** route SHALL receive `302` to `/auth/login` carrying the original path as a validated return target. An unauthenticated request to `/api/**` SHALL receive `401` with a JSON body and no `Location` header. API requests MUST NOT be answered with a redirect, because a redirect to an HTML login page is indistinguishable from success to a `fetch` caller and surfaces as a JSON parse error rather than an auth failure.
+
+On the LiveView socket, an unauthenticated or expired mount SHALL `redirect` to `/auth/login` and SHALL push no fleet data.
 
 #### Scenario: Unauthenticated API request is rejected, not redirected
 
-- **WHEN** a request without a valid session cookie arrives at `GET /api/fleet`
+- **WHEN** a request without an `Authorization` header arrives at `GET /api/sites`
 - **THEN** the server responds `401` with a JSON body and no `Location` header
 
 #### Scenario: Unauthenticated page request is redirected to login
 
-- **WHEN** a request without a valid session cookie arrives at `GET /fleet/ie01`
+- **WHEN** a request without a valid session cookie arrives at `GET /`
 - **THEN** the server responds `302` to `/auth/login` carrying the original path as the return target
+
+#### Scenario: The socket is gated independently of the pipeline
+
+- **WHEN** a LiveView socket connects or reconnects carrying a cookie whose session has expired or been signed out
+- **THEN** `on_mount` halts and redirects to `/auth/login`, and no fleet data is pushed over the socket
 
 #### Scenario: Health probe is never gated
 
 - **WHEN** `GET /healthz` is requested with no session cookie
 - **THEN** the server responds `200` with body `ok`, no redirect and no `Set-Cookie`
 
+#### Scenario: A new route is gated by default
+
+- **WHEN** a route is added with no explicit public designation in this table
+- **THEN** it requires authentication until this spec is amended
+
 ### Requirement: Authorization Code Flow
 
-The server SHALL implement the OIDC authorization code flow as a confidential client. The implicit and hybrid flows MUST NOT be used. On `GET /auth/login` the server SHALL generate a `state` value and a `nonce` value, each at least 128 bits of CSPRNG output, record them against a pending authorization request with an expiry of no more than 10 minutes, and redirect to the provider's authorization endpoint with `response_type=code`, `scope=openid profile email`, the configured `client_id`, and the registered `redirect_uri`.
+The server SHALL implement the OIDC authorization code flow as a confidential client. The implicit and hybrid flows MUST NOT be used.
 
-On `GET /auth/callback` the server SHALL reject the request unless the returned `state` matches a pending, unexpired authorization request. A `state` value SHALL be single-use and MUST be deleted once consumed, whether the exchange then succeeds or fails.
+`GET /auth/login` and `GET /auth/callback` SHALL be actions on a plain controller, outside every `live_session`. A LiveView process cannot set a cookie — by the time it mounts, the HTTP response is sent and no `Plug.Conn` is in play — and both endpoints must write to the session cookie.
 
-The authorization code SHALL be exchanged for tokens by a direct server-to-server `POST` to the provider's token endpoint over TLS, authenticated with the `client_secret`. The code and the secret MUST NOT pass through the browser.
+On `GET /auth/login` the server SHALL generate a `state`, a `nonce`, and a PKCE code verifier, each of at least 128 bits of `:crypto.strong_rand_bytes/1` output. `:rand` and any other non-cryptographic generator MUST NOT be used. These values SHALL be recorded in the session cookie against an expiry of no more than 10 minutes, and the browser SHALL be redirected to the provider's authorization endpoint with:
 
-#### Scenario: Login redirects with state and nonce
+- `response_type=code` — pinned. Pocket ID also advertises `id_token`, which would deliver a token through the browser.
+- `code_challenge_method=S256` — pinned. Pocket ID also advertises `plain`, which MUST be rejected and MUST NOT be negotiated to.
+- `response_mode=query` — pinned. `form_post` returns the response as a cross-site `POST`, on which `SameSite=Lax` withholds the very cookie carrying `state`, `nonce`, and the verifier, and which `protect_from_forgery` would reject regardless.
+- `scope=openid profile email groups`, the configured `client_id`, and the registered `redirect_uri`.
+
+On `GET /auth/callback` the server SHALL reject the request unless the returned `state` matches the pending, unexpired value in the session. Comparison SHALL use `Plug.Crypto.secure_compare/2`. A `state` SHALL be single-use and MUST be cleared from the session once consumed, whether the exchange then succeeds or fails.
+
+The authorization code SHALL be exchanged by a direct server-to-server `POST` to the provider's token endpoint over TLS with certificate-chain verification enabled, authenticating with `client_secret_basic`. Pocket ID advertises `none` among its token-endpoint auth methods; that MUST NOT be used. The code and the secret MUST NOT pass through the browser.
+
+#### Scenario: Login redirects with state, nonce, and an S256 challenge
 
 - **WHEN** an unauthenticated user requests `GET /auth/login`
-- **THEN** the server redirects to the Pocket ID authorization endpoint with `response_type=code`, a `state` parameter, and a `nonce` parameter
+- **THEN** the server redirects to the Pocket ID authorization endpoint with `response_type=code`, a `state`, a `nonce`, and `code_challenge_method=S256`
 
 #### Scenario: Callback with an unknown state is rejected
 
-- **WHEN** `GET /auth/callback` arrives with a `state` that matches no pending authorization request
+- **WHEN** `GET /auth/callback` arrives with a `state` that matches no pending value in the session
 - **THEN** the server responds `400`, creates no session, and logs the rejection
 
 #### Scenario: Replayed state is rejected
@@ -70,27 +98,43 @@ The authorization code SHALL be exchanged for tokens by a direct server-to-serve
 
 #### Scenario: Expired authorization request is rejected
 
-- **WHEN** a callback presents a `state` whose pending request was created more than 10 minutes earlier
+- **WHEN** a callback presents a `state` recorded more than 10 minutes earlier
 - **THEN** the server responds `400` and creates no session
 
 ### Requirement: ID Token Validation
 
-The server SHALL validate the ID token returned from the token endpoint. Because the token is received by direct TLS-protected communication with the token endpoint, the server MAY rely on TLS server validation in place of verifying the token signature, per OIDC Core 1.0 §3.1.3.7 item 6. This exemption applies ONLY to tokens received on that direct channel; a token arriving by any other path MUST have its signature verified before use.
+The server SHALL **verify the ID token's signature** against a key from the issuer's JWKS, discovered from `/.well-known/openid-configuration`. There is no exemption. The Gren-era reliance on OIDC Core 1.0 §3.1.3.7 item 6 is withdrawn: it existed because Gren shipped no cryptography, and on the BEAM `:crypto` and JOSE make verification ordinary.
 
-Regardless of the signature exemption, the server SHALL verify that:
+The server SHALL:
 
-- `iss` exactly equals the configured issuer
-- `aud` contains the configured `client_id`
-- `exp` is in the future and `iat` is not implausibly far in the past, allowing no more than 120 seconds of clock skew
-- `nonce` equals the value recorded against the pending authorization request
+- Accept only `RS256`, matching Pocket ID's `id_token_signing_alg_values_supported`. The `alg` header MUST be one the issuer advertises and MUST be asymmetric.
+- Reject `alg: none` and every HMAC algorithm **before any key lookup occurs**, rather than matching them against a key.
+- Select the verification key by **`kid`**. Trying every key in the JWKS and accepting the token if any of them verifies MUST NOT occur.
+- Cache the discovery document and JWKS with a bounded lifetime, and re-fetch on an unknown `kid`, with the re-fetch itself rate-limited so an attacker cannot drive unbounded requests at the issuer.
+- Verify `iss` exactly equals the configured issuer, `aud` contains the configured `client_id`, `exp` is in the future and `iat` not implausibly old, allowing no more than 120 seconds of clock skew, and `nonce` equals the value recorded in the session.
 
-If any check fails the server SHALL NOT create a session, and SHALL respond `401`.
+If any check fails the server SHALL NOT create a session and SHALL respond `401`.
 
-The server SHALL validate the TLS certificate chain of the token endpoint. TLS verification MUST NOT be disabled by configuration, environment variable, or build flag — the signature exemption above makes that chain the sole integrity guarantee for the token.
+TLS certificate-chain verification of the token and JWKS endpoints MUST NOT be disabled by configuration, environment variable, or build flag.
+
+#### Scenario: Token with an unverifiable signature is rejected
+
+- **WHEN** an ID token is presented whose signature does not verify against a JWKS key
+- **THEN** no session is created and the server responds `401`
+
+#### Scenario: Algorithm confusion is refused before key lookup
+
+- **WHEN** an ID token is presented with `alg: none` or an HMAC `alg`
+- **THEN** it is rejected before any key is selected, no session is created, and the server responds `401`
+
+#### Scenario: Unknown kid triggers a bounded refresh
+
+- **WHEN** an ID token carries a `kid` absent from the cached JWKS
+- **THEN** the JWKS is re-fetched at most once within the configured window, and if the key is still unknown the token is rejected `401`
 
 #### Scenario: Token with a mismatched nonce is rejected
 
-- **WHEN** the token endpoint returns an ID token whose `nonce` does not match the pending request's nonce
+- **WHEN** the ID token's `nonce` does not match the value recorded in the session
 - **THEN** the server creates no session and responds `401`
 
 #### Scenario: Expired token is rejected
@@ -105,108 +149,138 @@ The server SHALL validate the TLS certificate chain of the token endpoint. TLS v
 
 ### Requirement: Session Lifecycle
 
-On successful validation the server SHALL create a session keyed by an opaque identifier of at least 256 bits of CSPRNG output. The identifier MUST NOT encode, and MUST NOT be derived from, any claim, user identifier, or timestamp.
+On successful validation the server SHALL establish a Phoenix session via `Plug.Session`. The session is a **signed and encrypted cookie**, not an opaque identifier pointing at server-held state; there is no session store to supervise.
 
-The session cookie SHALL be set with `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`. It MUST NOT carry a `Domain` attribute, so that it stays host-scoped to binnacle rather than shared across `.stump.rocks`.
+`@session_options` in `BinnacleWeb.Endpoint` SHALL set:
 
-Sessions SHALL expire no more than 12 hours after creation. The server SHALL treat an expired session as absent and SHALL delete expired sessions rather than merely refusing them.
+- `store: :cookie` with both a `signing_salt` and an **`encryption_salt`**, so the payload is encrypted rather than merely signed. The session carries claims, and a signed-only cookie is readable by anyone holding it.
+- Both salts read from configuration. The `signing_salt` MUST NOT remain a literal in `endpoint.ex`.
+- `secure: true` — **missing today** — `http_only: true`, `same_site: "Lax"`, `Path=/`, and no `:domain`, so the cookie stays host-scoped to binnacle rather than shared across `.stump.rocks`.
+- `max_age` matching the session cap below.
 
-`POST /auth/logout` SHALL delete the server-side session and clear the cookie. Logout MUST be effective server-side: clearing the cookie alone is insufficient, because a copied cookie value would otherwise remain valid.
+Sessions SHALL expire no more than **12 hours** after creation. The expiry SHALL additionally be carried as a claim **inside the session payload** and checked server-side on every request and **every mount, including every LiveView reconnect** — the cookie's `max_age` is enforced by the client and MUST NOT be the only thing enforcing expiry. An expired session SHALL be treated as absent.
 
-Session state SHALL hold only what the application needs — the subject identifier, email, display name, issue time, and expiry. Access tokens and refresh tokens SHALL NOT be persisted, because binnacle calls no provider API on the user's behalf.
+Session contents SHALL be limited to the subject identifier, the identity claims enumerated under "Identity in Assigns", the issue time, the expiry, and the ID token retained solely as the `id_token_hint` for RP-initiated logout. **Access and refresh tokens SHALL NOT be persisted**, and `offline_access` SHALL NOT be requested.
+
+`POST /auth/logout` SHALL clear the session, disconnect the user's live sockets via `live_socket_id` and `Endpoint.broadcast/3`, and redirect to the provider's `end_session_endpoint` with the `id_token_hint`. Logout MUST be `POST`-only; a `GET` logout is forgeable from any page.
+
+**Revocation limit, stated normatively so it is not discovered later.** A cookie session cannot be revoked before it expires. Clearing the cookie ends the session in *that* browser, and the socket broadcast terminates connected LiveViews immediately, but a cookie value captured before logout and replayed afterwards SHALL still authenticate until its `exp` elapses. Pocket ID advertises neither front-channel nor back-channel logout, so a sign-out or account disable at the IdP likewise does not propagate into binnacle within the session lifetime. The 12-hour cap is the bound on both exposures. Any requirement for immediate revocation is a change to ADR-0006, not an implementation detail.
 
 #### Scenario: Successful login issues a hardened cookie
 
 - **WHEN** the ID token passes every validation check
-- **THEN** the server responds with `Set-Cookie` carrying `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and no `Domain` attribute
+- **THEN** the response sets a cookie carrying `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, a `Max-Age`, and no `Domain` attribute
 
-#### Scenario: Logout invalidates the session server-side
+#### Scenario: Logout ends the session and disconnects live sockets
 
-- **WHEN** a user posts to `/auth/logout` and the same cookie value is then replayed on a gated route
-- **THEN** the replayed request is treated as unauthenticated
+- **WHEN** a user posts to `/auth/logout` while a LiveView is connected
+- **THEN** the session is cleared, the live socket is disconnected by broadcast, and the browser is redirected to the provider's `end_session_endpoint`
 
-#### Scenario: Expired session is treated as absent
+#### Scenario: Expiry is enforced server-side, not only by the cookie
 
-- **WHEN** a request presents a session cookie whose session was created more than 12 hours earlier
-- **THEN** the request is treated as unauthenticated and the session record is deleted
+- **WHEN** a session payload whose `exp` claim has passed is presented, on an HTTP request or on a socket mount
+- **THEN** the request or mount is treated as unauthenticated regardless of what the cookie's own `Max-Age` would have allowed
 
-### Requirement: Cryptographic Primitives
+### Requirement: Two Authentication Schemes, No Crossover
 
-All random values specified here — `state`, `nonce`, and session identifiers — SHALL be produced by a cryptographically secure pseudo-random number generator. A general-purpose pseudo-random generator, including `gren-lang/core`'s seeded `Random`, MUST NOT be used for any of them.
+`/api/**` authenticates with a static bearer token (`BinnacleWeb.Plugs.ApiAuth`, `BINNACLE_API_TOKEN`) because it serves **machine integrations, not browsers**. That is a deliberate second scheme, not a leftover, and this spec no longer claims `/api/**` requires a session.
 
-Because the Gren ecosystem provides no cryptographic primitives, the CSPRNG SHALL be reached through a task port exposing Node's `crypto`. The port surface SHALL be limited to random-byte generation and SHA-256, and SHALL NOT be widened to general JavaScript evaluation.
+- The **browser session** authenticates HTML and LiveView routes.
+- The **bearer token** authenticates `/api/**`. It is a machine credential belonging to an integration, not to a person; it carries no identity and attributes nothing.
+- **Neither grants the other.** A browser session MUST NOT authenticate `/api/**`, so a page the user visits cannot use their browser as a confused deputy against the API. A bearer token MUST NOT authenticate the UI.
+- The `:api` pipeline **MUST NOT** call `fetch_session`. This is the enforcement rather than a convention: a pipeline that never reads the session cannot honour one by accident.
 
-Random values SHALL be compared in constant time where a comparison decides authentication — specifically the `state` and session-identifier lookups.
+Per-user API access is a future decision, not a loosening of this one.
 
-#### Scenario: Session identifiers are unpredictable
+#### Scenario: A logged-in browser gets no API access
 
-- **WHEN** session identifiers are generated repeatedly
-- **THEN** each is at least 256 bits drawn from the CSPRNG, and no value repeats
+- **WHEN** a browser holding a valid binnacle session requests `GET /api/sites` with no `Authorization` header
+- **THEN** the server responds `401`; the session is irrelevant
 
-#### Scenario: The port surface stays narrow
+#### Scenario: A bearer token gets no UI access
 
-- **WHEN** the task port module is reviewed
-- **THEN** it exposes only random-byte generation and SHA-256, with no general-purpose evaluation entry point
+- **WHEN** a request presents a valid bearer token but no session and requests `GET /`
+- **THEN** the server responds `302` to `/auth/login`; the token does not authenticate the UI
 
 ### Requirement: Client Configuration and Secret Handling
 
-The OIDC client SHALL be provisioned in Pocket ID by the `joestump.pocket_id.oidc_client` Ansible module, not registered by hand. The server SHALL read `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` from the environment, sourced from OpenBao by the deployment.
+The OIDC client SHALL be provisioned in Pocket ID by the `joestump.pocket_id.oidc_client` Ansible module, not registered by hand, and SHALL be registered with `pkce_enabled: true` — the module defaults it to `false`.
 
-The client secret MUST NOT appear in the repository, the container image, the SPA bundle, log output, or any error message or diagnostic response. The server SHALL fail to start — loudly, with a message naming the missing variable — rather than starting unauthenticated when any of the three is absent or empty.
+`config/runtime.exs` SHALL read `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` from the environment, sourced from OpenBao by the deployment, following the existing `BINNACLE_API_TOKEN` pattern: environment only, never `config/config.exs`, never the baseline fixture. The server SHALL fail to boot loudly in `:prod`, naming the missing variable, rather than starting unauthenticated.
 
-The `redirect_uri` SHALL be registered explicitly with the provider and SHALL exactly match the value the server sends. Wildcard redirect registration MUST NOT be used.
+The client secret MUST NOT appear in the repository, the container image, rendered HEEx, LiveView socket assigns, log output, or any error message. **Crash output counts**: an Elixir stacktrace renders the arguments of the failing call, so any struct or keyword list carrying the secret SHALL be redacted before it can reach a `FunctionClauseError` report.
+
+The `redirect_uri` SHALL be registered explicitly and SHALL exactly match the value the server sends. Wildcard redirect registration MUST NOT be used.
 
 #### Scenario: Missing configuration fails startup
 
-- **WHEN** the server starts with `OIDC_CLIENT_SECRET` unset
-- **THEN** it exits non-zero with a message naming the missing variable, and does not begin serving
+- **WHEN** the release starts in `:prod` with `OIDC_CLIENT_SECRET` unset or empty
+- **THEN** `runtime.exs` raises naming the missing variable and the endpoint never binds
 
-#### Scenario: Secret never reaches a response
+#### Scenario: Secret never reaches a response or a log
 
-- **WHEN** the token exchange fails and the server renders an error
-- **THEN** the response and the log line contain no part of the client secret
+- **WHEN** the token exchange fails and the server renders an error or logs the failure
+- **THEN** neither the response nor the log line contains any part of the client secret
 
-### Requirement: Session Identity Exposure
+#### Scenario: Secret is redacted in crash output
 
-`GET /api/session` SHALL return the authenticated identity — subject, email, display name, and session expiry — as a value whose type is defined once in `packages/core` and shared by the server and the SPA, per ADR-0001. The SPA SHALL learn its identity only from this endpoint and MUST NOT parse a token.
+- **WHEN** the OIDC client configuration is inspected, logged, or rendered in a crash report
+- **THEN** the secret is redacted rather than printed
 
-The response MUST NOT include the session identifier, any token, or any provider credential.
+### Requirement: Deployment Preconditions
 
-#### Scenario: Session endpoint returns the shared identity type
+Three deployment facts break authentication at **runtime** rather than at compile time. They are requirements of this spec because no amount of correct application code compensates for any of them.
 
-- **WHEN** an authenticated user requests `GET /api/session`
-- **THEN** the response decodes into the `packages/core` identity type, carrying no token and no session identifier
+- **`SECRET_KEY_BASE` SHALL be provisioned from OpenBao.** `runtime.exs` currently falls back to `:crypto.strong_rand_bytes(64)` when the variable is absent, justified by a comment stating binnacle *"has no authenticated sessions"* — a premise this spec ends. With a cookie session store, a key regenerated on boot invalidates **every session on every restart and redeploy**. The fallback SHALL be removed, the variable SHALL be required in `:prod`, and the comment SHALL be rewritten.
+- **`PHX_HOST` SHALL be set** on binnacle's deployment. It is unset today, so the production `url` host falls back to `example.com`. This is latent while LiveView uses relative URLs and becomes a hard failure as soon as an absolute `redirect_uri` must be generated.
+- **The Dockerfile `HEALTHCHECK` SHALL probe `/healthz`, not `/`.** It currently probes `http://127.0.0.1:${PORT}/`, which this spec gates. The change SHALL land no later than the change that gates `/`, or the container follows a redirect to a login it cannot complete and is permanently unhealthy.
 
-#### Scenario: Session endpoint is gated
+#### Scenario: Sessions survive a redeploy
 
-- **WHEN** `GET /api/session` is requested without a valid session
-- **THEN** the server responds `401`
+- **WHEN** the container is restarted or redeployed with `SECRET_KEY_BASE` supplied from OpenBao
+- **THEN** a session cookie issued before the restart still authenticates afterwards
 
-### Requirement: Interim Access Control Before the Server Ships
+#### Scenario: The health probe survives gating
 
-binnacle is currently served by a static file server with no session capability, and is publicly reachable. Until the Gren server implements this spec, access SHALL be gated by the shared oauth2-proxy: the inventory entry SHALL set `oauth2_proxy.enabled: true`, per `stumpcloud/ansible` ADR-0018.
+- **WHEN** authentication is enabled and the container's own HEALTHCHECK runs
+- **THEN** it probes `/healthz`, receives `200`, and the container reports healthy
 
-That interim gate SHALL be removed in the same change that enables native login, and the two MUST NOT both be active — a forward-auth redirect stacked in front of binnacle's own redirect produces a login loop that is difficult to diagnose from either side.
+### Requirement: Identity in Assigns
 
-#### Scenario: Interim gate protects the current deployment
+> Renamed from **Session Identity Exposure**. There is no `GET /api/session` endpoint and no shared package; both belonged to the SPA architecture that ADR-0004 removed.
 
-- **WHEN** an unauthenticated request reaches `https://binnacle.stump.rocks/` before the Gren server ships
-- **THEN** Caddy's forward auth redirects it to Pocket ID rather than serving the SPA
+The authenticated identity SHALL be `Binnacle.Auth.Identity`, an Elixir struct defined **once** and used by both the router plug and the `on_mount` hook. `BinnacleWeb.Plugs.RequireAuth` SHALL assign it to `conn.assigns.current_identity`; the `on_mount` hook SHALL assign it to `socket.assigns.current_identity` at mount.
 
-#### Scenario: The two gates are never both active
+Its fields SHALL be drawn from the validated ID token alone and SHALL be bounded by Pocket ID's advertised `claims_supported`: `sub`, `given_name`, `family_name`, `name`, `display_name`, `email`, `email_verified`, `preferred_username`, `picture`, `groups`, `auth_time`, `amr` — plus the session expiry. **No userinfo request is made**: Pocket ID places `groups` in the ID token when the scope is requested, so every claim arrives signature-verified in one hop.
 
-- **WHEN** native OIDC login is enabled in the inventory
-- **THEN** the same change removes `oauth2_proxy.enabled`, and no deployed state has both
+The struct MUST NOT carry any token or provider credential. Socket assigns are serialized into the LiveView's process state, and anything in them is one `inspect/1` away from a log line.
+
+`groups` is captured because it is free and a future authorization ADR will want it. It grants nothing today: every authenticated Pocket ID user is a full binnacle user.
+
+#### Scenario: A LiveView mount carries the identity
+
+- **WHEN** a LiveView mounts with a valid session
+- **THEN** `socket.assigns.current_identity` is a `Binnacle.Auth.Identity` struct carrying no token and no credential
+
+#### Scenario: Identity claims do not exceed what the provider sends
+
+- **WHEN** the identity struct is defined
+- **THEN** every field maps to a claim in Pocket ID's `claims_supported`, or to the session expiry
+
+#### Scenario: Inspecting the identity leaks nothing
+
+- **WHEN** the identity struct is inspected or logged
+- **THEN** no token or provider credential appears
 
 ### Requirement: Error Handling Standards
 
 All error-producing operations in the authentication path MUST follow structured error handling:
 
-- Errors MUST be wrapped with contextual information at each layer boundary, naming the operation that failed (for example, "token exchange failed: connection refused to identity.stump.rocks")
-- Distinct failure modes that the caller must distinguish — unknown state, expired state, token validation failure, provider unreachable — MUST be represented as distinct values in the type system, not as a single opaque error string
-- Silent error swallowing MUST NOT occur; every error MUST be returned to the caller or logged with sufficient context
-- Structured logging MUST be used, with key-value pairs rather than string interpolation
-- Authentication failures MUST be logged with the reason and the source address, and MUST NOT log the code, the token, the secret, or the session identifier
+- Errors MUST be wrapped with contextual information at each layer boundary, naming the operation that failed — for example "token exchange failed: connection refused to identity.stump.rocks".
+- Distinct failure modes the caller must distinguish — unknown state, expired state, signature verification failure, claim validation failure, provider unreachable — MUST be distinct **tagged tuples** (`{:error, :expired_state}`, `{:error, {:token_invalid, :signature}}`), not one opaque string, and MUST be matched exhaustively so a new mode is a compile-time warning rather than a silent fallthrough.
+- Silent error swallowing MUST NOT occur.
+- `Logger` MUST be used with structured metadata rather than string interpolation.
+- Authentication failures MUST be logged with the reason and the source address, and MUST NOT log the code, the token, the secret, or the session payload.
 
 #### Scenario: Provider outage is distinguishable from rejection
 
@@ -216,26 +290,34 @@ All error-producing operations in the authentication path MUST follow structured
 #### Scenario: Failed authentication logs no credential
 
 - **WHEN** any authentication step fails
-- **THEN** the log line names the reason and the source address, and contains no code, token, secret, or session identifier
+- **THEN** the log line names the reason and the source address, and contains no code, token, secret, or session payload
 
-### Requirement: Session Store Standards
+### Requirement: Supervised State Standards
 
-Session and pending-authorization state SHALL be held in a store that survives neither longer than its expiry nor less than a rolling container restart, as chosen in the design document. Where the store is a database:
+> Renamed from **Session Store Standards**, which specified database mechanics — transactions, connection lifecycle, parameterized queries — for a store this design no longer has. Sessions live in the cookie and `state`/`nonce`/verifier ride with them, so there is nothing to transact and nothing to query. The one idea that survives is that ephemeral state must not accumulate without bound; it is restated here for OTP.
 
-- Multi-step mutations that must be atomic — consuming a `state` and creating a session — MUST occur in a transaction
-- Connection lifecycle MUST be explicitly managed, with connections released after use and timeouts configured
-- Queries MUST be parameterized; string interpolation into queries MUST NOT occur
-- Expired sessions and expired pending requests MUST be purged on a schedule, not only on access, so that an abandoned login does not accumulate rows indefinitely
+Any in-memory state introduced by this spec SHALL follow OTP ownership rules:
 
-#### Scenario: State consumption and session creation are atomic
+- An ETS table SHALL be created and owned by a **process supervised from `Binnacle.Supervisor`**, never by a request process. A table dies with its owner, so a table created by whichever request happens to arrive first is destroyed when that request finishes, and concurrent first requests race on creation.
+- A restart of the owning process SHALL leave the application serving — the table is recreated by the supervision tree rather than silently disappearing.
+- Any keyed table that grows with distinct client input SHALL evict idle entries on a schedule rather than only on access, so that abandoned entries do not accumulate indefinitely.
 
-- **WHEN** a callback consumes a `state` and creates a session
-- **THEN** both occur in one transaction, and a failure leaves neither a consumed state nor an orphaned session
+This applies to `BinnacleWeb.Plugs.RateLimit`, whose table is presently created by a request process — tracked as a defect in its own right — and to anything later added alongside it.
 
-#### Scenario: Abandoned logins are purged
+#### Scenario: A supervised table survives its first request
 
-- **WHEN** a pending authorization request expires without a callback
-- **THEN** it is removed by the scheduled purge rather than persisting until a later lookup
+- **WHEN** the first request after a cold start completes
+- **THEN** the table still exists and subsequent requests still see its contents
+
+#### Scenario: Concurrent cold-start requests do not error
+
+- **WHEN** many requests arrive concurrently on a cold start
+- **THEN** none returns `500` from a table-creation race
+
+#### Scenario: Idle entries are evicted
+
+- **WHEN** a keyed entry goes idle past its window
+- **THEN** a scheduled sweep removes it rather than it persisting for the process's lifetime
 
 ## Security Requirements
 
@@ -243,7 +325,7 @@ This spec defines HTTP endpoints and is web-facing. The following requirements a
 
 ### Authentication
 
-Every endpoint defaults to authenticated. The four public endpoints are enumerated in "Unauthenticated Access Boundary" above, each with its justification. No endpoint may be added without an explicit auth designation.
+Every route defaults to authenticated. The public routes are enumerated in "Unauthenticated Access Boundary", each with its justification, and authentication is applied in **both** the router pipeline and `on_mount` inside a `live_session`. No route may be added without an explicit auth designation.
 
 #### Scenario: A new endpoint without a designation fails review
 
@@ -252,25 +334,45 @@ Every endpoint defaults to authenticated. The four public endpoints are enumerat
 
 ### Rate Limiting
 
-`GET /auth/login` and `GET /auth/callback` SHALL be rate limited per source address. The limit SHALL permit ordinary interactive use — a handful of attempts per minute — while preventing an attacker from cheaply enumerating `state` values or flooding the pending-request store.
+`GET /auth/login` and `GET /auth/callback` SHALL be rate limited per source address, with their **own budget** separate from the API's, so a login burst cannot consume the API's allowance or vice versa. The limit SHALL permit ordinary interactive use — a handful of attempts per minute — while preventing `state` enumeration and callback flooding. A throttled callback SHALL be rejected **before** any state comparison, so throttling does not itself become an oracle.
+
+The source address SHALL be derived from `x-forwarded-for`, and that header SHALL be trusted **only** from the known reverse proxy. Behind Caddy, `conn.remote_ip` is the proxy for every request, so an unadjusted limiter is global rather than per-client; trusting the header unconditionally instead hands an attacker an unlimited supply of bucket keys.
+
+`/healthz` SHALL NOT be rate limited.
 
 #### Scenario: Callback flooding is throttled
 
 - **WHEN** one source address issues callback requests far beyond the configured rate
-- **THEN** further requests receive `429` and no pending-request lookups are performed for them
+- **THEN** further requests receive `429` and no state comparison is performed for them
+
+#### Scenario: Clients behind the proxy are limited separately
+
+- **WHEN** two clients behind Caddy issue requests
+- **THEN** they consume separate buckets, and exhausting one does not throttle the other
 
 ### Security Headers
 
-Every response SHALL carry `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and a `Content-Security-Policy` that sets `frame-ancestors 'none'` and `default-src 'self'`.
+Every response SHALL carry `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a `Content-Security-Policy` setting `frame-ancestors 'none'`, `default-src 'self'`, and `base-uri 'none'`.
+
+> **`no-referrer`, amended 2026-08-21.** This spec previously specified `strict-origin-when-cross-origin` while `BinnacleWeb.Plugs.SecurityHeaders` sets `no-referrer`. `no-referrer` is the stricter of the two and binnacle has no cross-origin referrer it needs to send, so **the spec moved and the code did not**.
+
+Headers SHALL be set at the **endpoint** level so they cover every response including error paths. Phoenix's `put_secure_browser_headers/1` fills only headers that are not already set, so the endpoint plug wins on browser routes; a test SHALL assert this so a Phoenix upgrade cannot silently downgrade the CSP.
+
+The CSP MUST NOT use `'unsafe-inline'` on `script-src`. Inline scripts the application genuinely needs SHALL carry a per-request nonce or a build-time hash.
 
 #### Scenario: Responses carry the headers
 
-- **WHEN** any response is returned, authenticated or not
-- **THEN** it carries HSTS, `nosniff`, a referrer policy, and a CSP denying framing
+- **WHEN** any response is returned, authenticated or not, including an error page
+- **THEN** it carries HSTS, `nosniff`, `X-Frame-Options: DENY`, `referrer-policy: no-referrer`, and a CSP denying framing
+
+#### Scenario: The endpoint CSP survives the router's secure headers
+
+- **WHEN** a browser route returns a response through `put_secure_browser_headers/1`
+- **THEN** the endpoint-level CSP is the one present on the response
 
 ### Request Body Size Limits
 
-The server SHALL cap request body size and reject anything larger with `413`. Endpoints in this spec accept no meaningful body, so the cap SHALL be small.
+The server SHALL cap request body size and reject anything larger with `413`. This is already enforced globally by `Plug.Parsers` in `BinnacleWeb.Endpoint` at 1 MB; the endpoints in this spec accept no meaningful body.
 
 #### Scenario: Oversized body is rejected
 
@@ -279,25 +381,27 @@ The server SHALL cap request body size and reject anything larger with `413`. En
 
 ### CSRF Protection
 
-State-changing requests SHALL be protected against cross-site forgery. `SameSite=Lax` on the session cookie suppresses cross-site POST, and `/auth/logout` SHALL be `POST` only — a `GET` logout is forgeable from any page and MUST NOT be offered. The `state` parameter provides the equivalent protection for the login flow itself.
+State-changing requests SHALL be protected against cross-site forgery. The `:browser` pipeline SHALL keep `protect_from_forgery`, `SameSite=Lax` on the session cookie suppresses cross-site POST, and `/auth/logout` SHALL be `POST` only. The `state` parameter provides the equivalent protection for the login flow itself.
 
 #### Scenario: Cross-site logout is ineffective
 
 - **WHEN** a third-party page attempts to log the user out by cross-site request
-- **THEN** the cookie is not attached and the session survives
+- **THEN** the cookie is not attached, the CSRF token is absent, and the session survives
 
 ### Redirect Validation
 
-The post-login return target SHALL be validated before use. It MUST be a path on binnacle beginning with a single `/` and MUST NOT begin with `//` or contain a scheme or authority. Anything failing validation SHALL be replaced with `/`. The `redirect_uri` sent to the provider SHALL be the configured, registered value and MUST NOT be taken from the request.
+The post-login return target SHALL be validated before use. It MUST be a path on binnacle beginning with a single `/`, MUST NOT begin with `//` or `/\`, and MUST NOT contain a scheme or authority. Anything failing validation SHALL be replaced with `/`. Validation SHALL happen **after** any decoding, so percent-encoded and double-encoded variants cannot smuggle an authority past it.
+
+The return target SHALL be carried in the **session**, not in a query parameter that returns from the IdP. The `redirect_uri` sent to the provider SHALL be the configured, registered value and MUST NOT be taken from the request.
 
 #### Scenario: Open redirect is refused
 
-- **WHEN** a login carries a return target of `https://evil.example/` or `//evil.example/`
-- **THEN** the user is returned to `/` after login and never to the external host
+- **WHEN** a login carries a return target of `https://evil.example/`, `//evil.example/`, `/\evil.example/`, or a percent-encoded form of any of them
+- **THEN** the user lands on `/` after login and never on the external host
 
 ## Accessibility Requirements
 
-The SPA renders authentication state, so the following apply per WCAG 2.1 AA.
+The authenticated LiveView shell renders authentication state, so the following apply per WCAG 2.1 AA. These requirements are unchanged in substance from the original spec; only the surface they describe has moved from an SPA to HEEx.
 
 ### WCAG 2.1 AA Compliance
 
@@ -309,11 +413,11 @@ The authenticated shell MUST place `role="banner"` on the header carrying the id
 
 ### Icon-Only Controls
 
-Any icon-only control introduced by this spec — a logout glyph or an avatar button in particular — MUST carry an `aria-label` naming its purpose.
+Any icon-only control introduced by this spec — a logout glyph or an avatar button in particular — MUST carry an `aria-label` naming its purpose. `BinnacleWeb.UI.Icon` and `BinnacleWeb.UI.Button` are the existing components to extend rather than duplicate.
 
 ### Dynamic Content Regions
 
-Authentication state changes MUST be announced: session expiry and sign-out MUST update an `aria-live="polite"` region, and an authentication error that interrupts the user MUST use `aria-live="assertive"`.
+Authentication state changes MUST be announced: session expiry and sign-out MUST update an `aria-live="polite"` region, and an authentication error that interrupts the user MUST use `aria-live="assertive"`. `BinnacleWeb.Layouts.flash_group/1` already wraps flashes in a polite live region and MUST be reused — two competing live regions announce unpredictably.
 
 ### Keyboard Navigation
 

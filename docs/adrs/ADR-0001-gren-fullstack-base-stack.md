@@ -7,7 +7,9 @@ decision-makers: [joestump]
 
 # ADR-0001: Gren full-stack base for binnacle
 
-> **Superseded by [ADR-0004](ADR-0004-elixir-fullstack-base-stack.md)** (2026-08-18): binnacle's base stack is now Elixir + Phoenix + LiveView, still all functional programming. This ADR is kept for the record; the design-system reasoning it carried over is alive in ADR-0004.
+> **Superseded by ADR-0004** (2026-08-18): binnacle's base stack is now Elixir + Phoenix + LiveView, still all functional programming. This ADR is kept for the record; the design-system reasoning it carried over is alive in ADR-0004.
+>
+> **Disambiguation (2026-08-21).** The superseded-by edge above means ADR-0004, the **Elixir full-stack base**, and nothing else. A second file briefly also claimed the number 0004 — the OIDC ADR, which extended *this* one and has been renumbered to ADR-0006 and repointed at ADR-0004. ADR-0001 is superseded, not extended, and no edge from it survives to the OIDC work.
 
 ## Context and Problem Statement
 

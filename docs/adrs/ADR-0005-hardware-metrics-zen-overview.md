@@ -7,6 +7,8 @@ extends: [ADR-0002, ADR-0004]
 
 # ADR-0005: Hardware metrics over time — the zen overview
 
+> **Disambiguation (2026-08-21).** The extends edge above means ADR-0002, the StumpCloud fleet taxonomy, and ADR-0004, the Elixir full-stack base. When this ADR was written, a second file also claimed the number 0004 — the OIDC ADR, now renumbered to ADR-0006 — which made this edge ambiguous. It was always the Elixir base stack; there is no OIDC relationship here.
+
 ## Context and Problem Statement
 
 The fleet taxonomy (ADR-0002) gives binnacle the containment spine: Site → Host → Guest → Container, with hardware attached at either host or guest level. A fleet monitor's primary screen has to answer two questions at a glance: *what is it doing right now*, and *where is it heading* — a host at 70% CPU that has been climbing for ten minutes is a different animal from one loafing at 70%. What does binnacle's overview look like, and where do its readings come from before live discovery exists?
