@@ -269,7 +269,7 @@ jobs:
       # and the two never meet. ssh_private_key is what actually reaches
       # ansible.
       - name: Deploy binnacle to ie02
-        uses: https://gitea.stump.rocks/stumpcloud/ansible-runner@v2.1.0
+        uses: https://gitea.stump.rocks/stumpcloud/ansible-runner@51b328c2da9dd312eb11a71fa07da41c338a754b # v2.1.1
         with:
           playbook: playbooks/services/binnacle.yaml
           inventory: dub.yaml
